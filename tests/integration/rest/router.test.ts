@@ -94,6 +94,30 @@ test("idempotency key reused with a different body is a conflict",async()=>{
   }finally{server.close();}
 });
 
+test("metrics endpoint exposes Prometheus text format when enabled",async()=>{
+  const router=new RestRouter(new HmacBearerGuard(SECRET),new MemoryIdempotencyStore(),true);
+  router.add("GET","/api/v1/ping",[],async()=>({pong:true}));
+  const server=createServer((req,res)=>void router.handle(req,res));
+  await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
+  const port=(server.address() as AddressInfo).port;
+  try{
+    await call(port,"GET","/api/v1/ping",{token:token([])});
+    const res=await fetch(`http://127.0.0.1:${port}/metrics`);
+    assert.equal(res.status,200);
+    assert.match(res.headers.get("content-type")??"",/text\/plain/);
+    const text=await res.text();
+    assert.match(text,/bapc_http_requests_total/);
+  }finally{server.close();}
+});
+
+test("metrics endpoint is absent by default",async()=>{
+  const {server,port}=await startServer();
+  try{
+    const res=await fetch(`http://127.0.0.1:${port}/metrics`);
+    assert.equal(res.status,404);
+  }finally{server.close();}
+});
+
 test("rate limit trips after the configured number of requests",async()=>{
   const {server,port}=await startServer();
   try{

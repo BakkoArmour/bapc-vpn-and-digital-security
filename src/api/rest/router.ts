@@ -4,6 +4,7 @@ import {asHttpError,HttpError} from "./errors.js";
 import {HmacBearerGuard} from "./guard.js";
 import {MemoryRateLimiter, type RateLimitRule} from "./rate-limit.js";
 import {withIdempotency, MemoryIdempotencyStore, type IdempotencyStore} from "./idempotency.js";
+import {metrics} from "./metrics.js";
 
 export type JsonHandler=(ctx:{
   request:IncomingMessage; claims:{sub:string;roles:string[]}; body:any;
@@ -18,7 +19,10 @@ export class RestRouter {
   private routes:Route[]=[];
   private limiter=new MemoryRateLimiter();
   private idempotencyStore:IdempotencyStore;
-  constructor(private guard:HmacBearerGuard, idempotencyStore?:IdempotencyStore){
+  constructor(
+    private guard:HmacBearerGuard, idempotencyStore?:IdempotencyStore,
+    private exposeMetrics=false
+  ){
     this.idempotencyStore=idempotencyStore??new MemoryIdempotencyStore();
   }
   add(method:string,path:string,roles:string[],handler:JsonHandler,options:RouteOptions={}){
@@ -30,9 +34,15 @@ export class RestRouter {
     const requestId=randomUUID();
     try{
       if(req.url==="/healthz"){this.respond(res,200,{status:"ok",requestId});return;}
+      if(this.exposeMetrics&&req.url==="/metrics"){
+        res.writeHead(200,{"content-type":"text/plain; version=0.0.4"});
+        res.end(metrics.render());
+        return;
+      }
       const [path,rawQuery]=(req.url??"/").split("?") as [string,string|undefined];
       const query=new URLSearchParams(rawQuery??"");
       const route=this.routes.find(r=>r.method===req.method&&r.pattern.test(path));
+      metrics.incrLabeled("bapc_http_requests_total",{method:req.method??"?",path:route?path:"unmatched"});
       if(!route)throw new HttpError(404,"route not found","not_found");
       const match=path.match(route.pattern)!;
       const params=Object.fromEntries(route.keys.map((k,i)=>[k,decodeURIComponent(match[i+1]??"")]));
@@ -55,6 +65,7 @@ export class RestRouter {
       this.respond(res,result.status,result.body);
     }catch(error){
       const e=asHttpError(error);
+      metrics.incrLabeled("bapc_http_errors_total",{code:e.code,status:String(e.status)});
       this.respond(res,e.status,{requestId,error:{code:e.code,message:e.message}});
     }
   }

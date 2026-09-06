@@ -34,7 +34,7 @@ const heartbeats=new HeartbeatService(repo,repo,bus,clock);
 const commandQueue=new PgCommandQueue(db);
 
 const guard=new HmacBearerGuard(config.controlApiTokenSecret);
-const router=new RestRouter(guard,new PgIdempotencyStore(db));
+const router=new RestRouter(guard,new PgIdempotencyStore(db),true);
 
 router.add("GET","/api/v1/status",[],async({claims})=>({
   service:"bapc-vpn-security",version:"0.4.0",subject:claims.sub,
