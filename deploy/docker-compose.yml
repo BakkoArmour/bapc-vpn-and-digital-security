@@ -37,11 +37,12 @@ x-control-env: &control-env
 #              whose job actually requires it: secure-dns (DoH upstream),
 #              blind-relay (relays real traffic to/from internet peers) and
 #              egress-gateway (its entire purpose is proxying traffic out).
-# blind-relay is also on `api`, in addition to `egress`: it self-registers
-# and heartbeats against control-api's REST API (POST /api/v1/relays/
-# register, /:id/heartbeat — see src/runtime/relay-server.ts) so
-# RelayRoutingService has a real candidate to select, which needs it to
-# reach control-api the same way mesh-grpc/oob-controller/soc-console do.
+# blind-relay and egress-gateway are also on `api`, in addition to
+# `egress`: both self-register and heartbeat against control-api's REST API
+# (POST /api/v1/relays|egress/register, /:id/heartbeat — see
+# src/runtime/relay-server.ts and egress-server.ts) so RelayRoutingService/
+# EgressSelector have real candidates to select, which needs them to reach
+# control-api the same way mesh-grpc/oob-controller/soc-console do.
 
 services:
   postgres:
@@ -142,8 +143,19 @@ services:
 
   egress-gateway:
     <<: *app-image
-    environment: {NODE_ENV: production, EGRESS_BIND_HOST: "0.0.0.0", EGRESS_PORT: "1080"}
-    networks: [egress] # its whole job is internet egress — no database
+    environment:
+      NODE_ENV: production
+      EGRESS_BIND_HOST: "0.0.0.0"
+      EGRESS_PORT: "1080"
+      # Registration/heartbeat is entirely optional (egress-server.ts skips
+      # it cleanly if any of these five are unset) — set EGRESS_AGENT_TOKEN
+      # (mint with `npm run token -- --roles security-agent`) to enable it.
+      EGRESS_ID: "c7275156-d439-421d-beab-8d37f12480e3"
+      EGRESS_REGION: "local"
+      EGRESS_FIXED_IP: "egress-gateway:1080"
+      BAPC_CONTROLLER_URL: "http://control-api:8080"
+      BAPC_AGENT_TOKEN: ${EGRESS_AGENT_TOKEN:-}
+    networks: [egress, api] # egress to proxy real traffic; api to reach control-api for registration
     command: ["node", "dist/src/runtime/egress-server.js"]
     ports: ["1080:1080"]
 

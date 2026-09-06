@@ -43,6 +43,8 @@ import {ThreatEngine, type ThreatSignal} from "../../services/threat-engine/engi
 import {ThreatCorrelator} from "../../services/threat-engine/correlator.js";
 import {PgThreatActionPort} from "../../services/threat-engine/pg-threat-action-port.js";
 import {PgIncidentPort} from "../../services/threat-engine/pg-incident-port.js";
+import {EgressSelector} from "../../services/egress/selector.js";
+import {PgEgressStore} from "../../services/egress/pg-egress-store.js";
 import type {NetworkPolicy} from "../domain/types.js";
 
 await hydrateSecretsFromAws();
@@ -136,6 +138,12 @@ const socBackend=new SecuritySocBackend(
 const crlBuilder=new ForgeCrlBuilder();
 const relayFleet=loadRelayFleet();
 const relayStore=new PgRelayStore(db);
+// EgressSelector existed fully built and tested with nothing to select
+// from — unlike relays, egress gateways had no registry at all
+// (db/014_egress_gateways.sql is new). Modeled directly on the relay
+// registration/heartbeat pattern above.
+const egressStore=new PgEgressStore(db);
+const egressSelector=new EgressSelector();
 
 const guard=new HmacBearerGuard(config.controlApiTokenSecret);
 const router=new RestRouter(guard,new PgIdempotencyStore(db),true,new PgReplayStore(db));
@@ -389,6 +397,35 @@ router.add("POST","/api/v1/relays/:id/heartbeat",["security-agent"],async({param
   });
   return {acknowledged:true};
 },{rateLimit:{limit:120,windowMs:60_000}});
+
+// Same pattern as relay registration above — the current fixed
+// egress-server.ts process (src/runtime/egress-server.ts) registers itself
+// this way, so EgressSelector has at least one real candidate today and
+// scales to more without any code change once multiple gateways exist.
+router.add("POST","/api/v1/egress/register",["security-agent"],async({body})=>{
+  const gatewayId=String(body.gatewayId??"");
+  if(!gatewayId||!body.region||!body.fixedIp)throw new HttpError(400,"gatewayId, region and fixedIp are required","invalid_request");
+  await egressStore.insert(gatewayId,String(body.region),String(body.fixedIp));
+  return {registered:true,gatewayId};
+},{idempotent:true});
+
+router.add("POST","/api/v1/egress/:id/heartbeat",["security-agent"],async({params,body})=>{
+  await egressStore.heartbeat(params.id!,{
+    loadPercent:Number(body.loadPercent??0),healthy:body.healthy!==false
+  });
+  return {acknowledged:true};
+},{rateLimit:{limit:120,windowMs:60_000}});
+
+// The actual consumer: an endpoint agent (or anything else routing traffic
+// out) asks which egress gateway to use for a preferred region.
+// EgressSelector.select had no real candidate data or caller before this.
+router.add("GET","/api/v1/egress/select",["security-agent"],async({query})=>{
+  const gateways=await egressStore.candidates();
+  let selected;
+  try{selected=egressSelector.select(gateways,query.get("region")??"");}
+  catch{throw new HttpError(503,"no healthy egress gateway is currently registered","not_configured");}
+  return {gatewayId:selected.id,fixedIp:selected.fixedIp,region:selected.region};
+});
 
 const server=createServer((req,res)=>void router.handle(req,res));
 server.requestTimeout=15_000;
