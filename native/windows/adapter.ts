@@ -1,10 +1,12 @@
-import {writeFileSync, mkdtempSync} from "node:fs";
+import {writeFileSync, mkdtempSync, readFileSync} from "node:fs";
+import {createHash} from "node:crypto";
 import {tmpdir} from "node:os";
 import {join, dirname} from "node:path";
 import {fileURLToPath} from "node:url";
 import type {PlatformAdapter} from "../shared/platform-adapter.js";
 import type {CommandRunner} from "../shared/command-runner.js";
 import {systemCommandRunner} from "../shared/command-runner.js";
+import type {AgentPlatform, Route} from "../../src/agent/reconciler.js";
 
 const __dirname=dirname(fileURLToPath(import.meta.url));
 const SCRIPT_PATH=join(__dirname,"apply.ps1");
@@ -17,7 +19,7 @@ const WG_KEY_RE=/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/;
 // out to the official wireguard.exe CLI. Requires an elevated session and
 // WireGuard for Windows installed; every method throws (rather than
 // silently no-op'ing) when a prerequisite is missing.
-export class WindowsPlatformAdapter implements PlatformAdapter {
+export class WindowsPlatformAdapter implements PlatformAdapter, AgentPlatform {
   readonly platform="windows" as const;
   constructor(
     private interfaceAlias="BAPC",
@@ -94,5 +96,33 @@ export class WindowsPlatformAdapter implements PlatformAdapter {
       osCurrent:boolean;diskEncrypted:boolean;secureBoot:boolean;
       firewallEnabled:boolean;agentHealthy:boolean;bannedProcessFound:boolean;
     }>("CollectPosture");
+  }
+
+  // --- AgentPlatform: route-integrity monitoring/restoration
+  // (feature catalog items #56-60) ---
+
+  async readRoutes():Promise<Route[]>{
+    const result=await this.invokePs1<{routes:Array<{destination:string;gateway:string|null;interfaceName:string;metric:number}>}>("GetRoutes");
+    const routes=Array.isArray(result.routes)?result.routes:[result.routes].filter(Boolean);
+    return routes.map(r=>({
+      destination:r.destination,interfaceName:r.interfaceName,metric:r.metric,
+      ...(r.gateway?{gateway:r.gateway}:{})
+    }));
+  }
+
+  async replaceRoutes(routes:Route[]):Promise<void>{
+    await this.invokePs1("ReplaceRoutes",{routes});
+  }
+
+  async readFileHash(path:string):Promise<string>{
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  }
+
+  async applyFirewallPlan(plan:unknown):Promise<void>{
+    await this.applyFirewall(plan as Parameters<WindowsPlatformAdapter["applyFirewall"]>[0]);
+  }
+
+  async clearTransientCredentials():Promise<void>{
+    await this.invokePs1("ClearCredentials",{interfaceAlias:this.interfaceAlias});
   }
 }

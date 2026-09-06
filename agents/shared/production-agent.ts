@@ -1,5 +1,6 @@
 import {createHash} from "node:crypto";
 import type {PlatformAdapter} from "../../native/shared/platform-adapter.js";
+import type {AgentReconciler} from "../../src/agent/reconciler.js";
 
 export interface AgentController {
   heartbeat(input:{
@@ -12,7 +13,11 @@ export class ProductionAgent {
   private stopped=false;
   constructor(
     private nodeId:string,private version:string,private platform:PlatformAdapter,
-    private controller:AgentController,private intervalMs=30_000
+    private controller:AgentController,private intervalMs=30_000,
+    // Optional: only set when `platform` also implements AgentPlatform (the
+    // concrete Linux/Windows adapters do). Handles a "RECONCILE" command —
+    // route-integrity monitoring/restoration, feature catalog items #56-60.
+    private reconciler?:AgentReconciler
   ){}
   stop(){this.stopped=true;}
   async run(){
@@ -37,6 +42,12 @@ export class ProductionAgent {
         case "ROLLBACK_FIREWALL": await this.platform.rollbackFirewall(c.payload.commitId);break;
         case "QUARANTINE": await this.platform.isolate(c.payload.reason??"controller quarantine");break;
         case "RESTORE": await this.platform.restore();break;
+        case "RECONCILE": {
+          if(!this.reconciler)throw new Error("RECONCILE command received but no AgentReconciler is configured");
+          const result=await this.reconciler.reconcile(c.payload);
+          await this.controller.acknowledge(c.id,{ok:true,at:new Date().toISOString(),...result});
+          return;
+        }
         default: throw new Error(`unsupported controller command ${c.type}`);
       }
       await this.controller.acknowledge(c.id,{ok:true,at:new Date().toISOString()});

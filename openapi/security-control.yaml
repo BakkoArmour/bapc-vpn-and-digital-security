@@ -48,6 +48,103 @@ paths:
     get:
       responses:
         "200": {description: SOC counts, active nodes and recent events}
+  /api/v1/soc/snapshot/full:
+    get:
+      description: Richer snapshot including relays, certificates and incidents (PgSocData).
+      responses:
+        "200": {description: Full SOC snapshot}
+  /api/v1/soc/emergency-lockdown:
+    post:
+      description: >
+        Owner-only "ecosystem master kill switch": isolates every active mesh
+        node and terminates every active JIT grant. Requires the literal
+        confirmation string LOCKDOWN and a reason of at least 20 characters.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, confirmation]
+              properties:
+                reason: {type: string, minLength: 20}
+                confirmation: {const: LOCKDOWN}
+      responses:
+        "200": {description: Lockdown executed}
+        "429": {description: Rate limit exceeded (2 requests/minute per identity)}
+  /api/v1/certificates/crl:
+    get:
+      security: []
+      description: >
+        Real RFC 5280 X.509 CRL (application/pkix-crl), rebuilt from the
+        current is_revoked=true rows on every request. Public/unauthenticated
+        by design — a CRL distribution point has no prior relationship with
+        the clients checking it.
+      responses:
+        "200":
+          description: DER-encoded CertificateList
+          content:
+            application/pkix-crl: {schema: {type: string, format: binary}}
+  /api/v1/access/decide:
+    post:
+      description: >
+        The zero-trust Policy Decision Point. Device and mesh-node state are
+        looked up server-side by ID — never trusted from the request body —
+        so a caller cannot claim a compromised device is healthy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deviceId, nodeId, resource]
+              properties:
+                userId: {type: string}
+                roles: {type: array, items: {type: string}}
+                attributes: {type: object}
+                mfa: {type: boolean}
+                sourceIp: {type: string}
+                deviceId: {type: string}
+                nodeId: {type: string}
+                resource:
+                  type: object
+                  required: [zone]
+                  properties:
+                    resource: {type: string}
+                    zone: {type: string}
+                    protocol: {enum: [TCP, UDP, ICMP, ANY]}
+                    port: {type: integer}
+      responses:
+        "200": {description: Signed AccessDecision}
+  /api/v1/agent/heartbeat:
+    post:
+      description: Endpoint-agent heartbeat; returns any pending controller commands for the node.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nodeId, at, posture, agentVersion]
+              properties:
+                nodeId: {type: string}
+                at: {type: string, format: date-time}
+                posture: {type: object}
+                bytesTransmitted: {type: integer}
+                bytesReceived: {type: integer}
+                agentVersion: {type: string}
+      responses:
+        "200": {description: Heartbeat accepted, with pending commands}
+  /api/v1/agent/commands/{id}/ack:
+    post:
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+      requestBody:
+        content:
+          application/json:
+            schema: {type: object, properties: {result: {type: object}}}
+      responses:
+        "200": {description: Command acknowledged}
   /api/v1/jit:
     post:
       description: Idempotent — send the same Idempotency-Key header to safely retry.

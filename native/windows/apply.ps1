@@ -61,6 +61,37 @@ switch ($Action) {
     Get-NetFirewallRule -Group "BAPC-Quarantine" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     Write-Output (@{ restored = $true } | ConvertTo-Json)
   }
+  "GetRoutes" {
+    $routes = Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object {
+      @{
+        destination = $_.DestinationPrefix
+        gateway = if ($_.NextHop -and $_.NextHop -ne "0.0.0.0") { $_.NextHop } else { $null }
+        interfaceName = $_.InterfaceAlias
+        metric = $_.RouteMetric
+      }
+    }
+    Write-Output (@{ routes = @($routes) } | ConvertTo-Json -Depth 5)
+  }
+  "ReplaceRoutes" {
+    foreach ($route in $payload.routes) {
+      Get-NetRoute -DestinationPrefix $route.destination -InterfaceAlias $route.interfaceName -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+      $params = @{
+        DestinationPrefix = $route.destination
+        InterfaceAlias = $route.interfaceName
+        RouteMetric = $route.metric
+        ErrorAction = "SilentlyContinue"
+      }
+      if ($route.gateway) { $params.NextHop = $route.gateway }
+      New-NetRoute @params | Out-Null
+    }
+    Write-Output (@{ replaced = $payload.routes.Count } | ConvertTo-Json)
+  }
+  "ClearCredentials" {
+    # Drops the tunnel service's active session/keys immediately; the next
+    # applyWireGuard call reinstalls it with fresh configuration.
+    wireguard.exe /uninstalltunnelservice $payload.interfaceAlias 2>$null
+    Write-Output (@{ cleared = $true } | ConvertTo-Json)
+  }
   "CollectPosture" {
     $bitlocker = $null
     try { $bitlocker = (Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop).VolumeStatus -eq "FullyEncrypted" } catch { $bitlocker = $false }

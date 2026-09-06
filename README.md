@@ -48,13 +48,20 @@ This is a strict-TypeScript control plane with:
 - **APIs**: an HMAC-guarded REST API (idempotency-key replay handling,
   per-identity rate limiting, `/metrics`) and a real gRPC
   `MeshOrchestrationService` (enrollment, key rotation, streaming heartbeat).
+  `POST /api/v1/access/decide` exposes the actual zero-trust Policy Decision
+  Point (`PolicyDecisionService`) — MFA, device posture, node state, matching
+  policy and JIT gating, returning an HMAC-signed `AccessDecision` — looking
+  up device/node state server-side rather than trusting it from the request.
 - **Trust Core**: real X.509 issuance (`node-forge`) with the actual private
   key held behind a pluggable async signer — the same code path works for
   the development in-memory key provider here and a real HSM/KMS in
   production. See `runbooks/root-ca-ceremony.md` for the real ceremony.
 - **Network plane**: real Linux (`wg`/`ip`/`nft`) and Windows
   (`wireguard.exe` + a PowerShell helper) platform adapters, a real UDP
-  blind relay, and a real minimal SOCKS5 egress proxy.
+  blind relay, and a real minimal SOCKS5 egress proxy. Both adapters also
+  implement route-integrity monitoring/restoration (`AgentReconciler`,
+  feature catalog #56-60) — wired into the endpoint agent via a `RECONCILE`
+  controller command.
 - **Secure DNS**: a real UDP DNS server with threat-feed/DGA sinkholing and
   a DNS-over-HTTPS upstream client.
 - **Recovery & intelligence**: an out-of-band recovery channel on its own

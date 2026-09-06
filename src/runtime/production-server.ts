@@ -12,6 +12,8 @@ import {ThreatResponseService} from "../application/threat-response.js";
 import {RandomIds,SystemClock} from "../infrastructure/memory.js";
 import {InMemoryEnforcer, DevelopmentCertificateIssuer, NoopThreatSink} from "../infrastructure/adapters.js";
 import {HeartbeatService} from "../application/heartbeat.js";
+import {PolicyDecisionService} from "../application/policy.js";
+import {HmacDecisionSigner} from "../infrastructure/hmac-decision-signer.js";
 import {EcosystemIntegrationService} from "../application/integrations.js";
 import {DiagnosticsClearanceVerifier} from "../../integrations/diagnostics-clearance.js";
 import {PgCommandQueue} from "../../services/mesh-controller/pg-command-queue.js";
@@ -42,6 +44,12 @@ const threatResponse=new ThreatResponseService(
 );
 
 const heartbeats=new HeartbeatService(repo,repo,bus,clock);
+// The zero-trust Policy Decision Point (item #30 in the feature catalog:
+// "Separates Policy Decision Points and Policy Enforcement Points"). Signed
+// with the same secret PEPs already hold to call this API — see
+// HmacDecisionSigner. Was previously defined but never wired into any API,
+// which meant the actual access-decision engine had no caller at all.
+const policyDecision=new PolicyDecisionService(repo,repo,ids,clock,new HmacDecisionSigner(config.controlApiTokenSecret));
 const commandQueue=new PgCommandQueue(db);
 const socBackend=new SecuritySocBackend(
   new PgSocData(db),new PgSocActions(threatResponse,repo,repo,enforcer,bus,ids,clock)
@@ -150,6 +158,29 @@ router.add("POST","/api/v1/agent/commands/:id/ack",["security-agent"],async({par
   await commandQueue.acknowledge(params.id!,body.result);
   return {acknowledged:true};
 });
+
+// The Policy Enforcement Point call: "can this identity, on this device,
+// connecting from this mesh node, reach this resource, right now?" Device
+// and node are looked up server-side by ID rather than trusted from the
+// request body — accepting client-supplied posture/compromised flags here
+// would let a caller simply lie its way past the zero-trust check.
+router.add("POST","/api/v1/access/decide",["security-agent"],async({body})=>{
+  const device=await repo.get(String(body.deviceId));
+  if(!device||!("hardwareId" in device))throw new Error("device not found");
+  const node=await repo.get(String(body.nodeId));
+  if(!node||!("wireGuardPublicKey" in node))throw new Error("node not found");
+  const identity={
+    userId:String(body.userId??""),roles:Array.isArray(body.roles)?body.roles:[],
+    attributes:typeof body.attributes==="object"&&body.attributes?body.attributes:{},
+    mfa:Boolean(body.mfa),sourceIp:String(body.sourceIp??"")
+  };
+  const resource={
+    resource:String(body.resource?.resource??""),zone:body.resource?.zone,
+    protocol:body.resource?.protocol??"ANY",
+    ...(body.resource?.port?{port:Number(body.resource.port)}:{})
+  };
+  return policyDecision.decide(identity,device as any,node as any,resource);
+},{rateLimit:{limit:300,windowMs:60_000}});
 
 const server=createServer((req,res)=>void router.handle(req,res));
 server.requestTimeout=15_000;

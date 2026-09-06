@@ -1,9 +1,27 @@
-import {writeFileSync, mkdtempSync, existsSync} from "node:fs";
+import {writeFileSync, mkdtempSync, existsSync, readFileSync} from "node:fs";
+import {createHash} from "node:crypto";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import type {PlatformAdapter} from "../shared/platform-adapter.js";
 import type {CommandRunner} from "../shared/command-runner.js";
 import {systemCommandRunner} from "../shared/command-runner.js";
+import type {AgentPlatform, Route} from "../../src/agent/reconciler.js";
+
+const parseIpRouteLine=(line:string):Route|undefined=>{
+  const tokens=line.trim().split(/\s+/);
+  if(tokens.length===0||!tokens[0])return undefined;
+  const destination=tokens[0]==="default"?"0.0.0.0/0":tokens[0];
+  const via=tokens.indexOf("via");
+  const dev=tokens.indexOf("dev");
+  const metricIdx=tokens.indexOf("metric");
+  if(dev===-1)return undefined; // not a route line we can act on (e.g. a wrapped continuation)
+  return {
+    destination,
+    ...(via!==-1&&tokens[via+1]?{gateway:tokens[via+1]}:{}),
+    interfaceName:tokens[dev+1]!,
+    metric:metricIdx!==-1&&tokens[metricIdx+1]?Number(tokens[metricIdx+1]):0
+  };
+};
 
 const WG_KEY_RE=/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/; // base64 32-byte key, WireGuard's fixed padding char set
 const CIDR_RE=/^[0-9a-fA-F.:]+\/\d{1,3}$/;
@@ -16,7 +34,7 @@ const assertCidrList=(ips:string[])=>{for(const ip of ips)if(!CIDR_RE.test(ip))t
 // passed as a discrete argv element (never shell-interpolated), and every
 // method degrades to a clear thrown error — never a silent no-op — when the
 // required binary is missing, so a misconfigured host fails loudly.
-export class LinuxPlatformAdapter implements PlatformAdapter {
+export class LinuxPlatformAdapter implements PlatformAdapter, AgentPlatform {
   readonly platform="linux" as const;
   constructor(
     private iface="bapc0",
@@ -137,5 +155,39 @@ export class LinuxPlatformAdapter implements PlatformAdapter {
       diskEncrypted:existsSync("/etc/crypttab"),
       secureBoot, firewallEnabled, agentHealthy, bannedProcessFound:false
     };
+  }
+
+  // --- AgentPlatform: route-integrity monitoring/restoration
+  // (feature catalog items #56-60) ---
+
+  async readRoutes():Promise<Route[]>{
+    await this.requireBinary("ip");
+    const {stdout}=await this.run("ip",["route","show"]);
+    return stdout.split("\n").map(parseIpRouteLine).filter((r):r is Route=>r!==undefined);
+  }
+
+  async replaceRoutes(routes:Route[]):Promise<void>{
+    await this.requireBinary("ip");
+    for(const r of routes){
+      const args=["route","replace",r.destination,"dev",r.interfaceName,"metric",String(r.metric)];
+      if(r.gateway)args.splice(3,0,"via",r.gateway);
+      await this.run("ip",args);
+    }
+  }
+
+  async readFileHash(path:string):Promise<string>{
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  }
+
+  async applyFirewallPlan(plan:unknown):Promise<void>{
+    await this.applyFirewall(plan as Parameters<LinuxPlatformAdapter["applyFirewall"]>[0]);
+  }
+
+  async clearTransientCredentials():Promise<void>{
+    await this.requireBinary("ip");
+    // Bring the tunnel down rather than deleting the interface outright —
+    // this drops any active session/keys immediately while leaving the
+    // interface itself in place for the next applyWireGuard to reconfigure.
+    await this.run("ip",["link","set",this.iface,"down"]).catch(()=>{});
   }
 }

@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {readFileSync} from "node:fs";
+import {readFileSync, mkdtempSync, writeFileSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {createHash} from "node:crypto";
 import type {CommandRunner} from "../../../native/shared/command-runner.js";
 import {LinuxPlatformAdapter} from "../../../native/linux/adapter.js";
 import {WindowsPlatformAdapter} from "../../../native/windows/adapter.js";
@@ -78,6 +81,101 @@ test("LinuxPlatformAdapter.collectPosture reflects missing firewall table",async
   const adapter=new LinuxPlatformAdapter("bapc0",run);
   const posture=await adapter.collectPosture();
   assert.equal(posture.firewallEnabled,false);
+});
+
+test("LinuxPlatformAdapter.readRoutes parses real `ip route show` output",async()=>{
+  const {run}=fakeRunner({
+    which:()=>({stdout:"/usr/sbin/ip",stderr:""}),
+    ip:()=>({stdout:
+      "default via 192.168.1.1 dev eth0 proto dhcp metric 100 \n"+
+      "10.144.0.0/24 dev bapc0 proto kernel scope link src 10.144.0.5 metric 0 \n",
+      stderr:""})
+  });
+  const adapter=new LinuxPlatformAdapter("bapc0",run);
+  const routes=await adapter.readRoutes();
+  assert.deepEqual(routes,[
+    {destination:"0.0.0.0/0",gateway:"192.168.1.1",interfaceName:"eth0",metric:100},
+    {destination:"10.144.0.0/24",interfaceName:"bapc0",metric:0}
+  ]);
+});
+
+test("LinuxPlatformAdapter.replaceRoutes issues one `ip route replace` per route",async()=>{
+  const {run,calls}=fakeRunner({which:()=>({stdout:"/usr/sbin/ip",stderr:""}),ip:()=>({stdout:"",stderr:""})});
+  const adapter=new LinuxPlatformAdapter("bapc0",run);
+  await adapter.replaceRoutes([
+    {destination:"0.0.0.0/0",gateway:"192.168.1.1",interfaceName:"eth0",metric:100},
+    {destination:"10.144.0.0/24",interfaceName:"bapc0",metric:0}
+  ]);
+  const replaceCalls=calls.filter(c=>c.cmd==="ip"&&c.args[1]==="replace");
+  assert.equal(replaceCalls.length,2);
+  assert.ok(replaceCalls[0]!.args.includes("via"));
+  assert.ok(!replaceCalls[1]!.args.includes("via")); // no gateway on this route
+});
+
+test("LinuxPlatformAdapter.readFileHash computes a real SHA-256 over the file",async()=>{
+  const dir=mkdtempSync(join(tmpdir(),"bapc-hash-"));
+  const filePath=join(dir,"agent.env");
+  writeFileSync(filePath,"NODE_ENV=production\n");
+  const adapter=new LinuxPlatformAdapter("bapc0",fakeRunner({}).run);
+  const hash=await adapter.readFileHash(filePath);
+  assert.equal(hash,createHash("sha256").update("NODE_ENV=production\n").digest("hex"));
+});
+
+test("LinuxPlatformAdapter.clearTransientCredentials brings the interface down",async()=>{
+  const {run,calls}=fakeRunner({which:()=>({stdout:"/usr/bin/ip",stderr:""}),ip:()=>({stdout:"",stderr:""})});
+  const adapter=new LinuxPlatformAdapter("bapc0",run);
+  await adapter.clearTransientCredentials();
+  assert.ok(calls.some(c=>c.cmd==="ip"&&c.args.join(" ")==="link set bapc0 down"));
+});
+
+test("WindowsPlatformAdapter.readRoutes parses apply.ps1's GetRoutes JSON",async()=>{
+  const {run}=fakeRunner({
+    "powershell.exe":()=>({
+      stdout:JSON.stringify({routes:[
+        {destination:"0.0.0.0/0",gateway:"192.168.1.1",interfaceName:"Ethernet",metric:25},
+        {destination:"10.144.0.0/24",gateway:null,interfaceName:"BAPC",metric:0}
+      ]}),
+      stderr:""
+    })
+  });
+  const adapter=new WindowsPlatformAdapter("BAPC",run);
+  const routes=await adapter.readRoutes();
+  assert.deepEqual(routes,[
+    {destination:"0.0.0.0/0",interfaceName:"Ethernet",metric:25,gateway:"192.168.1.1"},
+    {destination:"10.144.0.0/24",interfaceName:"BAPC",metric:0}
+  ]);
+});
+
+test("WindowsPlatformAdapter.replaceRoutes sends the desired routes as a JSON payload",async()=>{
+  const {run,calls}=fakeRunner({
+    "powershell.exe":(args)=>{
+      const payloadPath=args[args.indexOf("-PayloadPath")+1]!;
+      const payload=JSON.parse(readFileSync(payloadPath,"utf8"));
+      assert.equal(payload.routes.length,1);
+      return {stdout:JSON.stringify({replaced:1}),stderr:""};
+    }
+  });
+  const adapter=new WindowsPlatformAdapter("BAPC",run);
+  await adapter.replaceRoutes([{destination:"0.0.0.0/0",gateway:"192.168.1.1",interfaceName:"Ethernet",metric:25}]);
+  assert.ok(calls.some(c=>c.args.includes("ReplaceRoutes")));
+});
+
+test("WindowsPlatformAdapter.readFileHash computes a real SHA-256 over the file",async()=>{
+  const dir=mkdtempSync(join(tmpdir(),"bapc-hash-"));
+  const filePath=join(dir,"agent.env");
+  writeFileSync(filePath,"NODE_ENV=production\n");
+  const adapter=new WindowsPlatformAdapter("BAPC",fakeRunner({}).run);
+  const hash=await adapter.readFileHash(filePath);
+  assert.equal(hash,createHash("sha256").update("NODE_ENV=production\n").digest("hex"));
+});
+
+test("WindowsPlatformAdapter.clearTransientCredentials uninstalls the tunnel service",async()=>{
+  const {run,calls}=fakeRunner({
+    "powershell.exe":()=>({stdout:JSON.stringify({cleared:true}),stderr:""})
+  });
+  const adapter=new WindowsPlatformAdapter("BAPC",run);
+  await adapter.clearTransientCredentials();
+  assert.ok(calls.some(c=>c.args.includes("ClearCredentials")));
 });
 
 test("WindowsPlatformAdapter.applyWireGuard writes a conf and installs the tunnel service",async()=>{
