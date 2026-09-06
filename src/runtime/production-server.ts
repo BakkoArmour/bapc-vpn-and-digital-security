@@ -11,6 +11,8 @@ import {SocService} from "../application/soc.js";
 import {ThreatResponseService} from "../application/threat-response.js";
 import {RandomIds,SystemClock} from "../infrastructure/memory.js";
 import {InMemoryEnforcer, DevelopmentCertificateIssuer, NoopThreatSink} from "../infrastructure/adapters.js";
+import {HeartbeatService} from "../application/heartbeat.js";
+import {PgCommandQueue} from "../../services/mesh-controller/pg-command-queue.js";
 import type {NetworkPolicy} from "../domain/types.js";
 
 const config=loadConfig();
@@ -27,6 +29,9 @@ const soc=new SocService(repo,repo,repo,repo,repo,clock);
 const threatResponse=new ThreatResponseService(
   repo,repo,repo,repo,new InMemoryEnforcer(),new DevelopmentCertificateIssuer(),bus,new NoopThreatSink()
 );
+
+const heartbeats=new HeartbeatService(repo,repo,bus,clock);
+const commandQueue=new PgCommandQueue(db);
 
 const guard=new HmacBearerGuard(config.controlApiTokenSecret);
 const router=new RestRouter(guard,new PgIdempotencyStore(db));
@@ -87,6 +92,21 @@ router.add("POST","/api/v1/nodes/:id/quarantine",["security-approver"],async({pa
 router.add("POST","/api/v1/nodes/:id/restore",["security-approver"],async({params,body})=>
   threatResponse.restore(params.id!,String(body.clearanceToken??""))
 );
+
+router.add("POST","/api/v1/agent/heartbeat",["security-agent"],async({body})=>{
+  const accepted=await heartbeats.accept({
+    nodeId:String(body.nodeId),at:new Date(body.at),posture:body.posture,
+    bytesTransmitted:Number(body.bytesTransmitted??0),bytesReceived:Number(body.bytesReceived??0),
+    agentVersion:String(body.agentVersion??"unknown")
+  });
+  const commands=await commandQueue.pending(String(body.nodeId));
+  return {...accepted,commands};
+});
+
+router.add("POST","/api/v1/agent/commands/:id/ack",["security-agent"],async({params,body})=>{
+  await commandQueue.acknowledge(params.id!,body.result);
+  return {acknowledged:true};
+});
 
 const server=createServer((req,res)=>void router.handle(req,res));
 server.requestTimeout=15_000;

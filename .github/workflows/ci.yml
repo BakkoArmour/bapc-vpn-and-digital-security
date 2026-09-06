@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-scan:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bapc
+          POSTGRES_PASSWORD: bapc
+          POSTGRES_DB: bapc_security_core
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U bapc"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies (locked)
+        run: npm ci
+
+      - name: Build (strict TypeScript)
+        run: npm run build
+
+      - name: Unit + integration tests
+        run: npm test
+        env:
+          DATABASE_URL: postgres://bapc:bapc@localhost:5432/bapc_security_core
+
+      - name: Dependency vulnerability scan
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Generate SBOM (CycloneDX)
+        run: npm sbom --sbom-format=cyclonedx > sbom.cyclonedx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cyclonedx.json
+          retention-days: 90

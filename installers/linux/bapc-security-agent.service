@@ -1,0 +1,27 @@
+[Unit]
+Description=BAPC VPN & Digital Security endpoint agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=bapc-security
+Group=bapc-security
+EnvironmentFile=-/etc/bapc-security/agent.env
+ExecStart=/usr/bin/node /opt/bapc-security/dist/src/runtime/agent.js
+Restart=on-failure
+RestartSec=5
+# The agent applies WireGuard/nftables changes via native/linux/adapter.ts,
+# which genuinely requires these privileges (equivalent to CAP_NET_ADMIN);
+# it does not run as root and no other capability is granted.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/bapc-security /var/lib/bapc-security
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
