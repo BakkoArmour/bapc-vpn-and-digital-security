@@ -1,5 +1,7 @@
 import {OobServer} from "../../services/oob-controller/oob-server.js";
+import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 
+await hydrateSecretsFromAws();
 const secret=process.env.OOB_SHARED_SECRET;
 if(!secret||secret.length<32){
   console.error(JSON.stringify({event:"fatal",error:"OOB_SHARED_SECRET must be set and at least 32 characters"}));

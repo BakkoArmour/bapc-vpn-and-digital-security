@@ -1,4 +1,5 @@
 import {randomUUID} from "node:crypto";
+import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 import {loadConfig} from "../config.js";
 import {Postgres} from "../infrastructure/postgres/client.js";
 import {PgRepositories} from "../infrastructure/postgres/repositories.js";
@@ -8,6 +9,7 @@ import {SecureDnsResolver, type DnsAudit} from "../../services/dns/resolver.js";
 import {BapcDnsServer} from "../../services/dns/dns-server.js";
 import {StaticListThreatFeed} from "../../services/dns/threat-feed.js";
 
+await hydrateSecretsFromAws();
 const config=loadConfig();
 const db=new Postgres(config.databaseUrl);
 const repo=new PgRepositories(db);

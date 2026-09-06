@@ -1,8 +1,10 @@
+import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 import {loadConfig} from "../config.js";
 import {Postgres} from "../infrastructure/postgres/client.js";
 import {loadMigrations, MigrationRunner} from "../infrastructure/postgres/migrate.js";
 
 const dir=process.argv[2] ?? "db";
+await hydrateSecretsFromAws();
 const config=loadConfig();
 const db=new Postgres(config.databaseUrl);
 const runner=new MigrationRunner(db);

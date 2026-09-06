@@ -1,4 +1,5 @@
 import {createServer} from "node:http";
+import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 import {loadConfig} from "../config.js";
 import {Postgres} from "../infrastructure/postgres/client.js";
 import {PgRepositories} from "../infrastructure/postgres/repositories.js";
@@ -29,6 +30,7 @@ import {ForgeCrlBuilder} from "../../services/trust-core/crl-builder.js";
 import {PgCertificateStore} from "../../services/trust-core/pg-certificate-store.js";
 import type {NetworkPolicy} from "../domain/types.js";
 
+await hydrateSecretsFromAws();
 const config=loadConfig();
 const db=new Postgres(config.databaseUrl);
 const repo=new PgRepositories(db);

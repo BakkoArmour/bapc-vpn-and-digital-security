@@ -86,6 +86,12 @@ This is a strict-TypeScript control plane with:
 - **Delivery**: GitHub Actions CI (build, tests including a live-Postgres
   integration test, `npm audit`, SBOM), Linux systemd + Windows (WinSW)
   endpoint-agent installers.
+- **Secrets**: every runtime entrypoint loads production secrets
+  (`CONTROL_API_TOKEN_SECRET`, `EVENT_SIGNING_SECRET`, `OOB_SHARED_SECRET`,
+  the ecosystem HMAC secrets) from a real AWS Secrets Manager secret when
+  `AWS_SECRETS_MANAGER_SECRET_ID` is set (`src/infrastructure/aws-secrets.ts`)
+  — real, wired code, not a stub — falling back to plain environment
+  variables otherwise.
 
 **What's still explicitly out of scope** (requires accounts, hardware, or a
 native platform SDK this session cannot provide — see

@@ -100,7 +100,7 @@ for (const item of [
   "Independent third-party penetration test with no unresolved critical/high findings",
   "Live incident-response, disaster-recovery and on-call rehearsal",
   "BAPC Diagnostics/Headquarters/Cloud-Deployment/Integration sibling apps actually reachable end-to-end",
-  "Production secrets (CONTROL_API_TOKEN_SECRET, EVENT_SIGNING_SECRET, OOB_SHARED_SECRET) issued from a real secret manager, not .env.example defaults",
+  "An actual AWS account/secret populated in AWS Secrets Manager (the integration itself is real and wired in src/infrastructure/aws-secrets.ts — set AWS_SECRETS_MANAGER_SECRET_ID once one exists)",
 ]) console.log(`  - ${item}`);
 
 console.log(`\n${failed.length === 0 ? "All repository-level checks passed." : `${failed.length} repository-level check(s) failed.`} This is a foundation-readiness signal, not a production-complete declaration.`);

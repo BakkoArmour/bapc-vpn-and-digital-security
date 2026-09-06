@@ -58,8 +58,11 @@ reference:
   repository only implements this side of that contract —
   `integrations/signed-event-client.ts` /
   `src/application/integrations.ts`).
-- Production secrets issued from a real secret manager, not the
-  `.env.example` development defaults.
+- An actual AWS account/secret populated in AWS Secrets Manager. The
+  integration itself is real and wired (`src/infrastructure/aws-secrets.ts`,
+  every runtime entrypoint calls it before reading config) — set
+  `AWS_SECRETS_MANAGER_SECRET_ID` once a secret exists; until then this
+  correctly falls back to `.env.example`-style environment variables.
 
 Do not declare this application "production complete" on the strength of
 `npm run audit:final` passing. Use it as a pre-flight check before attempting

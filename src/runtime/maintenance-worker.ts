@@ -1,3 +1,4 @@
+import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 import {loadConfig} from "../config.js";
 import {Postgres} from "../infrastructure/postgres/client.js";
 import {OutboxDispatcher} from "../infrastructure/postgres/outbox.js";
@@ -17,6 +18,7 @@ import {RetentionService} from "../infrastructure/postgres/maintenance.js";
  * Headquarters/etc., which don't exist to receive one in this environment.
  * Point `send` at a real webhook/broker client for your deployment.
  */
+await hydrateSecretsFromAws();
 const config=loadConfig();
 const db=new Postgres(config.databaseUrl);
 

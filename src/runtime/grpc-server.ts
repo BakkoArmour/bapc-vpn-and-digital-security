@@ -1,4 +1,5 @@
 import * as grpc from "@grpc/grpc-js";
+import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 import {loadConfig} from "../config.js";
 import {Postgres} from "../infrastructure/postgres/client.js";
 import {PgRepositories} from "../infrastructure/postgres/repositories.js";
@@ -14,6 +15,7 @@ import {ForgeX509Builder} from "../../services/trust-core/x509-forge.js";
 import {TrustCoreCertificateIssuer} from "../../services/trust-core/trust-core-certificate-issuer.js";
 import {PgCertificateStore} from "../../services/trust-core/pg-certificate-store.js";
 
+await hydrateSecretsFromAws();
 const config=loadConfig();
 const db=new Postgres(config.databaseUrl);
 const repo=new PgRepositories(db);
