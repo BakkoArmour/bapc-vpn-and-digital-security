@@ -55,6 +55,10 @@ export class PgRepositories implements DeviceRepository,NodeRepository,
     const r=await this.q(`SELECT * FROM bapc_security_core.mesh_nodes WHERE is_active=true ORDER BY node_id`);
     return r.rows.map(x=>this.node(x));
   }
+  async listAll():Promise<Device[]>{
+    const r=await this.q(`SELECT * FROM bapc_security_core.devices ORDER BY device_id`);
+    return r.rows.map((x:any)=>this.device(x));
+  }
   async listActive(now?:Date):Promise<any[]>{
     if(now){
       const r=await this.q(`SELECT * FROM bapc_security_core.jit_grants
