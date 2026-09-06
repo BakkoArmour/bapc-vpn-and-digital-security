@@ -1,3 +1,27 @@
+x-app-image: &app-image
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+x-control-env: &control-env
+  NODE_ENV: production
+  DATABASE_URL: postgres://bapc_security:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/bapc_security_core
+  CONTROL_API_TOKEN_SECRET: ${CONTROL_API_TOKEN_SECRET:?set CONTROL_API_TOKEN_SECRET, >=32 chars}
+  EVENT_SIGNING_SECRET: ${EVENT_SIGNING_SECRET:?set EVENT_SIGNING_SECRET, >=32 chars}
+  OOB_SHARED_SECRET: ${OOB_SHARED_SECRET:?set OOB_SHARED_SECRET, >=32 chars, different from CONTROL_API_TOKEN_SECRET}
+  DIAGNOSTICS_SHARED_SECRET: ${DIAGNOSTICS_SHARED_SECRET:-development-diagnostics-secret-change-me}
+  HEADQUARTERS_SHARED_SECRET: ${HEADQUARTERS_SHARED_SECRET:-development-headquarters-secret-change-me}
+  CLOUD_DEPLOYMENT_SHARED_SECRET: ${CLOUD_DEPLOYMENT_SHARED_SECRET:-development-cloud-deployment-secret-change-me}
+  INTEGRATION_SHARED_SECRET: ${INTEGRATION_SHARED_SECRET:-development-integration-secret-change-me}
+
+# Two networks, deliberately not one — this is a zero-trust-themed project,
+# so "everything can reach the internet" is not the default:
+#   control  — internal-only (no route out). Postgres and every pure
+#              control-plane service that talks only to each other.
+#   egress   — a normal bridge WITH internet access, for the three services
+#              whose job actually requires it: secure-dns (DoH upstream),
+#              blind-relay (relays real traffic to/from internet peers) and
+#              egress-gateway (its entire purpose is proxying traffic out).
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -7,8 +31,79 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     volumes:
       - security-db:/var/lib/postgresql/data
-      - ../db/001_security_core.sql:/docker-entrypoint-initdb.d/001.sql:ro
     networks: [control]
     healthcheck: {test: ["CMD-SHELL", "pg_isready -U bapc_security"], interval: 10s, timeout: 5s, retries: 5}
-networks: {control: {internal: true}}
+
+  # One-shot: applies db/*.sql (checksum-tracked, advisory-locked — see
+  # src/infrastructure/postgres/migrate.ts) then exits. Every service that
+  # touches the database waits for this to complete successfully first.
+  migrate:
+    <<: *app-image
+    environment: *control-env
+    networks: [control]
+    depends_on:
+      postgres: {condition: service_healthy}
+    command: ["node", "dist/src/runtime/migrate-cli.js", "db", "up"]
+    restart: "no"
+
+  control-api:
+    <<: *app-image
+    environment: {<<: *control-env, BIND_HOST: "0.0.0.0", PORT: "8080"}
+    networks: [control]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    command: ["node", "dist/src/runtime/production-server.js"]
+    ports: ["8080:8080"]
+    healthcheck: {test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"], interval: 15s, timeout: 5s, retries: 5}
+
+  mesh-grpc:
+    <<: *app-image
+    environment: {<<: *control-env, BIND_HOST: "0.0.0.0", GRPC_PORT: "50051"}
+    networks: [control]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    command: ["node", "dist/src/runtime/grpc-server.js"]
+    ports: ["50051:50051"]
+
+  oob-controller:
+    <<: *app-image
+    environment: {<<: *control-env, OOB_BIND_HOST: "0.0.0.0", OOB_PORT: "8181"}
+    networks: [control]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    command: ["node", "dist/src/runtime/oob-server.js"]
+    ports: ["8181:8181"]
+
+  soc-console:
+    <<: *app-image
+    networks: [control]
+    command: ["node", "dist/src/runtime/admin-console-server.js"]
+    ports: ["8090:8090"] # static file server only — no database, no secrets
+
+  secure-dns:
+    <<: *app-image
+    environment: {<<: *control-env, DNS_BIND_HOST: "0.0.0.0", DNS_PORT: "5353"}
+    networks: [control, egress]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    command: ["node", "dist/src/runtime/dns-server.js"]
+    ports: ["5353:5353/udp"]
+
+  blind-relay:
+    <<: *app-image
+    environment: {NODE_ENV: production, RELAY_BIND_HOST: "0.0.0.0", RELAY_PORT: "51900"}
+    networks: [egress] # stateless packet forwarder — no database
+    command: ["node", "dist/src/runtime/relay-server.js"]
+    ports: ["51900:51900/udp"]
+
+  egress-gateway:
+    <<: *app-image
+    environment: {NODE_ENV: production, EGRESS_BIND_HOST: "0.0.0.0", EGRESS_PORT: "1080"}
+    networks: [egress] # its whole job is internet egress — no database
+    command: ["node", "dist/src/runtime/egress-server.js"]
+    ports: ["1080:1080"]
+
+networks:
+  control: {internal: true}
+  egress: {}
 volumes: {security-db: {}}

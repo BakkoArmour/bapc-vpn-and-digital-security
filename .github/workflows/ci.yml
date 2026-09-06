@@ -55,3 +55,15 @@ jobs:
           name: sbom
           path: sbom.cyclonedx.json
           retention-days: 90
+
+      - name: Build container image
+        run: docker build -f deploy/Dockerfile -t bapc-vpn-digital-security:ci .
+
+      - name: Validate docker-compose.yml
+        run: |
+          docker compose -f deploy/docker-compose.yml config > /dev/null
+        env:
+          POSTGRES_PASSWORD: ci-only-value
+          CONTROL_API_TOKEN_SECRET: ci-only-secret-at-least-32-characters
+          EVENT_SIGNING_SECRET: ci-only-secret-at-least-32-characters
+          OOB_SHARED_SECRET: ci-only-oob-secret-at-least-32-chars

@@ -1,3 +1,14 @@
+# Minimal example for the control-plane API only, built from
+# deploy/Dockerfile. The other six services (mesh-grpc, secure-dns,
+# blind-relay, egress-gateway, oob-controller, soc-console) run the same
+# image with a different command/port — see deploy/docker-compose.yml for
+# the complete multi-service reference (including the required Secret keys
+# and the internal-vs-egress network split) that this manifest doesn't
+# reproduce; add the equivalent Deployment/Service pair per service,
+# a NetworkPolicy mirroring that internal/egress split, and a Secret named
+# bapc-security-control with the CONTROL_API_TOKEN_SECRET/EVENT_SIGNING_SECRET/
+# OOB_SHARED_SECRET/DIAGNOSTICS_SHARED_SECRET/etc. keys from .env.example
+# before applying this for real.
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: bapc-security-control, namespace: bapc-security}
@@ -10,7 +21,7 @@ spec:
       serviceAccountName: bapc-security-control
       containers:
         - name: control
-          image: registry.bapc.internal/security/control:0.2.0
+          image: registry.bapc.internal/security/control:0.4.0
           ports: [{containerPort: 8080}]
           envFrom: [{secretRef: {name: bapc-security-control}}]
           readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 3, periodSeconds: 10}
