@@ -1,4 +1,4 @@
-import {createHash,createHmac,timingSafeEqual} from "node:crypto";
+import {createHmac,timingSafeEqual} from "node:crypto";
 import type {IncomingMessage} from "node:http";
 import {HttpError} from "./errors.js";
 
@@ -24,5 +24,3 @@ export class HmacBearerGuard {
     return claims;
   }
 }
-export const bodyHash=(value:unknown)=>createHash("sha256")
-  .update(JSON.stringify(value??{})).digest("hex");
