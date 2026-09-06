@@ -80,3 +80,23 @@ test("PgRecoveryStore clears the previous last-known-good before inserting the n
   assert.match(queries[0]!.text,/UPDATE bapc_security_core\.recovery_snapshots/);
   assert.match(queries[1]!.text,/INSERT INTO bapc_security_core\.recovery_snapshots/);
 });
+
+// The SOC console's recovery/OOB status panel (Item 3) needs every scope's
+// current posture at once — previously the only read path (lastKnownGood)
+// required already knowing which scope to ask about.
+test("PgRecoveryStore.listLastKnownGood returns every scope's current last-known-good, most recent first",async()=>{
+  const queries:Array<{text:string;values:unknown[]}>=[];
+  const at=new Date();
+  const store=new PgRecoveryStore({
+    query:async(text,values=[])=>{
+      queries.push({text,values});
+      return {rows:[{scope:"mesh-policy",snapshot_id:"s1",checksum:"c1",created_by:"op-1",created_at:at.toISOString()}]};
+    }
+  });
+  const all=await store.listLastKnownGood();
+  assert.match(queries[0]!.text,/WHERE is_last_known_good=true/);
+  assert.match(queries[0]!.text,/ORDER BY created_at DESC/);
+  assert.equal(all[0]!.scope,"mesh-policy");
+  assert.equal(all[0]!.id,"s1");
+  assert.equal(all[0]!.createdBy,"op-1");
+});

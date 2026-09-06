@@ -137,7 +137,8 @@ const threatCorrelator=new ThreatCorrelator(threatEngine,THREAT_CORRELATION_WIND
 // (its own port/secret, by design — see that file's own comment) while
 // PgRecoveryStore keeps the durable last-known-good record on this side.
 const oobChannel=new HttpOobChannel(config.oobControllerUrl,config.oobSharedSecret);
-const oobController=new OobController(new PgRecoveryStore(db),oobChannel);
+const recoveryStore=new PgRecoveryStore(db);
+const oobController=new OobController(recoveryStore,oobChannel);
 
 const heartbeats=new HeartbeatService(repo,repo,bus,clock);
 // The zero-trust Policy Decision Point (item #30 in the feature catalog:
@@ -273,6 +274,13 @@ router.add("POST","/api/v1/oob/rollback",["security-owner"],async({claims,body})
   await audit.record(claims.sub,"OOB_ROLLBACK",String(body.scope),result);
   return result;
 },{rateLimit:{limit:2,windowMs:60_000}});
+
+// Read-only recovery posture for the SOC console — channel health plus
+// every scope's current last-known-good snapshot, without triggering a
+// checkpoint or rollback (both of which are real, gated actions above).
+router.add("GET","/api/v1/oob/status",["security-read"],async()=>({
+  healthy:await oobChannel.healthy(),lastKnownGood:await recoveryStore.listLastKnownGood()
+}));
 
 // Real X.509 CRL distribution point. Public by design: relying parties
 // checking a certificate's revocation status have no prior relationship
@@ -537,6 +545,11 @@ router.add("POST","/api/v1/relays/:id/heartbeat",["security-agent"],async({param
   });
   return {acknowledged:true};
 },{rateLimit:{limit:120,windowMs:60_000}});
+
+// Every egress gateway including stale/unhealthy ones — mirrors GET
+// /api/v1/relays (diagnostic visibility for the SOC console); egress/select
+// below only ever sees the filtered, healthy candidates() view.
+router.add("GET","/api/v1/egress",["security-read"],async()=>egressStore.list());
 
 // Same pattern as relay registration above — the current fixed
 // egress-server.ts process (src/runtime/egress-server.ts) registers itself

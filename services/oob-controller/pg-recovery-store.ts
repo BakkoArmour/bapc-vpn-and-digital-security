@@ -38,4 +38,21 @@ export class PgRecoveryStore implements RecoveryStore {
     const row=r.rows[0];
     return {id:row.snapshot_id,document:row.document,checksum:row.checksum};
   }
+
+  // The SOC console's recovery/OOB status panel (Item 3) needs to show
+  // every scope's current recovery posture, not just one the operator
+  // already knows to ask about — checkpoint() only ever refused/succeeded
+  // for a single caller-supplied scope with nothing to look back at
+  // afterward.
+  async listLastKnownGood(){
+    const r=await this.db.query(
+      `SELECT scope,snapshot_id,checksum,created_by,created_at
+       FROM bapc_security_core.recovery_snapshots WHERE is_last_known_good=true
+       ORDER BY created_at DESC`
+    );
+    return r.rows.map(row=>({
+      scope:row.scope,id:row.snapshot_id,checksum:row.checksum,
+      createdBy:row.created_by,createdAt:new Date(row.created_at)
+    }));
+  }
 }

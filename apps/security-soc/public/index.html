@@ -15,6 +15,8 @@
   .card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px;}
   .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#8b949e;margin:0 0 10px;}
   .stat{font-size:28px;font-weight:700;}
+  .stat.ok{color:#3fb950;}
+  .stat.bad{color:#f85149;}
   table{width:100%;border-collapse:collapse;font-size:13px;}
   th,td{text-align:left;padding:4px 6px;border-bottom:1px solid #21262d;}
   .full{grid-column:1/-1;}
@@ -22,7 +24,13 @@
   .sev-WARN{color:#d29922;}
   .sev-INFO{color:#8b949e;}
   .err{color:#f85149;font-size:12px;}
+  .muted{color:#8b949e;}
+  .pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;}
+  .pill.SUCCEEDED,.pill.COMMITTED,.pill.APPLIED,.pill.true{background:#0d3520;color:#3fb950;}
+  .pill.FAILED,.pill.ROLLED_BACK,.pill.STALE,.pill.false{background:#3d1414;color:#f85149;}
+  .pill.PENDING,.pill.TIMED_OUT,.pill.STAGED{background:#3a2c05;color:#d29922;}
   button.action{background:#21262d;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px;}
+  .cardHeaderRow{display:flex;align-items:center;justify-content:space-between;gap:8px;}
 
   dialog#formDialog{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:10px;padding:0;width:420px;max-width:90vw;}
   dialog#formDialog.wide{width:640px;}
@@ -59,20 +67,30 @@
   <div class="card"><h2>Active Policies</h2><div class="stat" id="statPolicies">–</div></div>
   <div class="card"><h2>Compromised Devices</h2><div class="stat" id="statCompromised">–</div></div>
   <div class="card"><h2>Critical Events</h2><div class="stat" id="statCritical">–</div></div>
+  <div class="card"><h2>Audit Chain</h2><div class="stat" id="statAuditChain">–</div></div>
+  <div class="card"><h2>OOB Recovery Channel</h2><div class="stat" id="statOobHealthy">–</div></div>
 
   <div class="card full">
     <h2>Mesh Nodes</h2>
-    <table id="nodesTable"><thead><tr><th>ID</th><th>Zone</th><th>Type</th><th>Active</th><th>Actions</th></tr></thead><tbody></tbody></table>
+    <table id="nodesTable"><thead><tr><th>ID</th><th>Zone</th><th>Region</th><th>Type</th><th>Active</th><th>Actions</th></tr></thead><tbody></tbody></table>
   </div>
 
   <div class="card full">
-    <h2>JIT Grants <button class="action" id="newJit" style="float:right">Request Access</button></h2>
-    <table id="jitTable"><thead><tr><th>ID</th><th>User</th><th>Resource</th><th>Zone</th><th>Expires</th><th>Actions</th></tr></thead><tbody></tbody></table>
+    <h2>Threat Signals (active correlation windows)</h2>
+    <table id="threatsTable"><thead><tr><th>Node</th><th>Accumulated Signals</th><th>Last Signal</th><th>Actions</th></tr></thead><tbody></tbody></table>
+    <p class="muted" id="threatsEmpty" style="display:none;margin:6px 0 0">No nodes currently have an active, un-escalated correlation window.</p>
   </div>
 
   <div class="card full">
-    <h2>Network Policies</h2>
+    <div class="cardHeaderRow"><h2 style="margin:0">Network Policies</h2>
+      <button class="action" id="applyPolicies">Apply Active Policies</button>
+    </div>
     <table id="policiesTable"><thead><tr><th>ID</th><th>Name</th><th>Action</th><th>Priority</th><th>Active</th><th>Actions</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card full" id="rolloutCard" style="display:none">
+    <h2>Last Policy Rollout <span class="muted" id="rolloutCommit" style="font-weight:normal;text-transform:none;letter-spacing:normal"></span></h2>
+    <table id="rolloutTable"><thead><tr><th>Node</th><th>Status</th><th>Acknowledged</th></tr></thead><tbody></tbody></table>
   </div>
 
   <div class="card">
@@ -82,12 +100,35 @@
 
   <div class="card">
     <h2>Relays <button class="action" id="newRelay" style="float:right">Provision Relay</button></h2>
-    <table id="relaysTable"><thead><tr><th>Region</th><th>Endpoint</th><th>Load%</th><th>Up</th><th>Actions</th></tr></thead><tbody></tbody></table>
+    <table id="relaysTable"><thead><tr><th>Region</th><th>Endpoint</th><th>Load%</th><th>Cap%</th><th>Sessions</th><th>Latency</th><th>Up</th><th>Actions</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Egress Gateways</h2>
+    <table id="egressTable"><thead><tr><th>Region</th><th>Fixed IP</th><th>Load%</th><th>Cap%</th><th>Sessions</th><th>Healthy</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card full">
+    <h2>Recovery / Out-of-Band Status <button class="action" id="newCheckpoint" style="float:right">Create Checkpoint</button></h2>
+    <table id="oobTable"><thead><tr><th>Scope</th><th>Snapshot</th><th>Created By</th><th>Created At</th><th>Actions</th></tr></thead><tbody></tbody></table>
+    <p class="muted" id="oobEmpty" style="display:none;margin:6px 0 0">No recovery checkpoints recorded yet.</p>
+  </div>
+
+  <div class="card full">
+    <div class="cardHeaderRow"><h2 style="margin:0">Audit Trail</h2>
+      <button class="action" id="verifyAudit">Verify Chain Integrity</button>
+    </div>
+    <table id="auditTable"><thead><tr><th>Seq</th><th>Time</th><th>Actor</th><th>Action</th><th>Subject</th></tr></thead><tbody></tbody></table>
   </div>
 
   <div class="card full">
     <h2>Recent Security Events</h2>
     <table id="eventsTable"><thead><tr><th>Time</th><th>Severity</th><th>Engine</th><th>Type</th><th>Description</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card full">
+    <h2>JIT Grants <button class="action" id="newJit" style="float:right">Request Access</button></h2>
+    <table id="jitTable"><thead><tr><th>ID</th><th>User</th><th>Resource</th><th>Zone</th><th>Expires</th><th>Actions</th></tr></thead><tbody></tbody></table>
   </div>
 </main>
 
@@ -106,6 +147,7 @@
 
 <script>
 let base = "", token = "";
+let lastRolloutCommitId = null;
 
 // Every mutating console action used to chain native window.prompt()/confirm()
 // calls: no inline validation, not stylable, blocks the main thread, and (as
@@ -146,12 +188,16 @@ function openForm({title, description, fields, confirmLabel = "Submit", danger =
           o.value = opt; o.textContent = opt;
           input.appendChild(o);
         }
+      } else if (f.type === "checkbox") {
+        input = document.createElement("input");
+        input.type = "checkbox";
       } else {
         input = document.createElement("input");
         input.type = f.type || "text";
       }
       if (f.placeholder) input.placeholder = f.placeholder;
-      if (f.value !== undefined) input.value = f.value;
+      if (f.type === "checkbox") { if (f.value) input.checked = true; }
+      else if (f.value !== undefined) input.value = f.value;
       wrap.appendChild(input);
       body.appendChild(wrap);
       inputs[f.name] = input;
@@ -167,10 +213,10 @@ function openForm({title, description, fields, confirmLabel = "Submit", danger =
     form.onsubmit = (e) => {
       e.preventDefault();
       const values = {};
-      for (const f of fields) values[f.name] = inputs[f.name].value;
+      for (const f of fields) values[f.name] = f.type === "checkbox" ? inputs[f.name].checked : inputs[f.name].value;
       for (const f of fields) {
         const v = values[f.name];
-        if (f.minLength && v.trim().length < f.minLength) {
+        if (f.minLength && String(v).trim().length < f.minLength) {
           errorEl.textContent = `${f.label} must be at least ${f.minLength} characters.`;
           return;
         }
@@ -216,6 +262,13 @@ function row(cells) {
   return tr;
 }
 
+function pill(text) {
+  const span = document.createElement("span");
+  span.className = `pill ${text}`;
+  span.textContent = text;
+  return span;
+}
+
 function actionButton(label, onClick) {
   const btn = document.createElement("button");
   btn.className = "action"; btn.textContent = label; btn.onclick = onClick;
@@ -228,12 +281,40 @@ function setStatus(message, isError) {
   el.className = isError ? "err" : "";
 }
 
+// Rollout status is keyed off the last commitId this console itself
+// triggered (or observed via POLICY_APPLIED) — there's no "list every past
+// commit" endpoint, so this shows the one rollout an operator most likely
+// just cares about: the most recent apply.
+async function refreshRollout() {
+  const card = document.getElementById("rolloutCard");
+  if (!lastRolloutCommitId) { card.style.display = "none"; return; }
+  try {
+    const nodes = await api(`/api/v1/policies/${lastRolloutCommitId}/rollout`);
+    card.style.display = "";
+    document.getElementById("rolloutCommit").textContent = lastRolloutCommitId.slice(0, 8);
+    const body = document.querySelector("#rolloutTable tbody");
+    body.innerHTML = "";
+    for (const n of nodes) {
+      body.appendChild(row([
+        n.nodeId.slice(0, 8), pill(n.status),
+        n.acknowledgedAt ? new Date(n.acknowledgedAt).toLocaleString() : "–"
+      ]));
+    }
+  } catch (err) {
+    card.style.display = "none";
+  }
+}
+
 async function refresh() {
   setStatus("", false);
   try {
-    const [snapshot, full] = await Promise.all([
+    const [snapshot, full, threats, oobStatus, egress, relays] = await Promise.all([
       api("/api/v1/soc/snapshot"),
-      api("/api/v1/soc/snapshot/full")
+      api("/api/v1/soc/snapshot/full"),
+      api("/api/v1/threats/active"),
+      api("/api/v1/oob/status"),
+      api("/api/v1/egress"),
+      api("/api/v1/relays")
     ]);
     document.getElementById("statDevices").textContent = snapshot.counts.devices;
     document.getElementById("statNodes").textContent = snapshot.counts.activeNodes;
@@ -241,6 +322,17 @@ async function refresh() {
     document.getElementById("statPolicies").textContent = snapshot.counts.activePolicies;
     document.getElementById("statCompromised").textContent = snapshot.counts.compromisedDevices;
     document.getElementById("statCritical").textContent = snapshot.counts.criticalEvents;
+
+    const oobStat = document.getElementById("statOobHealthy");
+    oobStat.textContent = oobStatus.healthy ? "Healthy" : "Unreachable";
+    oobStat.className = `stat ${oobStatus.healthy ? "ok" : "bad"}`;
+
+    const auditStat = document.getElementById("statAuditChain");
+    try {
+      const verify = await api("/api/v1/audit/verify");
+      auditStat.textContent = verify.valid ? "Valid" : "TAMPERED";
+      auditStat.className = `stat ${verify.valid ? "ok" : "bad"}`;
+    } catch (err) { auditStat.textContent = "–"; auditStat.className = "stat"; }
 
     const jitBody = document.querySelector("#jitTable tbody");
     jitBody.innerHTML = "";
@@ -304,7 +396,7 @@ async function refresh() {
 
     const relaysBody = document.querySelector("#relaysTable tbody");
     relaysBody.innerHTML = "";
-    for (const r of full.relays) {
+    for (const r of relays) {
       const terminateBtn = actionButton("Terminate", async () => {
         const values = await openForm({
           title: "Terminate Relay",
@@ -315,18 +407,68 @@ async function refresh() {
         });
         if (!values) return;
         try {
-          await api(`/api/v1/relays/${r.relay_id}/terminate`, { method: "POST" });
+          await api(`/api/v1/relays/${r.id}/terminate`, { method: "POST" });
           refresh();
         } catch (err) { setStatus(err.message, true); }
       });
-      relaysBody.appendChild(row([r.region, r.endpoint, r.load_percent, r.is_available ? "yes" : "no", terminateBtn]));
+      relaysBody.appendChild(row([
+        r.region, r.endpoint, Math.round(r.loadPercent ?? 0), Math.round(r.capacityPercent ?? 0),
+        r.activeSessions ?? "–", r.latencyMs != null ? `${r.latencyMs}ms` : "–",
+        r.available ? "yes" : "no", terminateBtn
+      ]));
     }
+
+    const egressBody = document.querySelector("#egressTable tbody");
+    egressBody.innerHTML = "";
+    for (const g of egress) {
+      egressBody.appendChild(row([
+        g.region, g.fixedIp, Math.round(g.loadPercent ?? 0), Math.round(g.capacityPercent ?? 0),
+        g.activeSessions ?? "–", g.healthy ? "yes" : "no"
+      ]));
+    }
+
+    const threatsBody = document.querySelector("#threatsTable tbody");
+    threatsBody.innerHTML = "";
+    document.getElementById("threatsEmpty").style.display = threats.length ? "none" : "";
+    for (const t of threats) {
+      const dismissBtn = actionButton("Dismiss", async () => {
+        try { await api(`/api/v1/threats/${t.nodeKey}/dismiss`, { method: "POST" }); refresh(); }
+        catch (err) { setStatus(err.message, true); }
+      });
+      threatsBody.appendChild(row([t.nodeKey.slice(0, 8), t.signalCount, new Date(t.latestAt).toLocaleString(), dismissBtn]));
+    }
+
+    const oobBody = document.querySelector("#oobTable tbody");
+    oobBody.innerHTML = "";
+    document.getElementById("oobEmpty").style.display = oobStatus.lastKnownGood.length ? "none" : "";
+    for (const s of oobStatus.lastKnownGood) {
+      const rollbackBtn = actionButton("Rollback", async () => {
+        const values = await openForm({
+          title: "Roll Back to Last-Known-Good",
+          description: `Restore scope "${s.scope}" to its last recorded checkpoint (${s.id.slice(0, 8)})? This is a significant recovery action.`,
+          danger: true, confirmLabel: "Roll Back", fields: []
+        });
+        if (!values) return;
+        try { await api("/api/v1/oob/rollback", { method: "POST", body: JSON.stringify({ scope: s.scope }) }); refresh(); }
+        catch (err) { setStatus(err.message, true); }
+      });
+      oobBody.appendChild(row([s.scope, s.id.slice(0, 8), s.createdBy, new Date(s.createdAt).toLocaleString(), rollbackBtn]));
+    }
+
+    const auditBody = document.querySelector("#auditTable tbody");
+    auditBody.innerHTML = "";
+    try {
+      const auditChain = await api("/api/v1/audit");
+      for (const a of auditChain.slice(-25).reverse()) {
+        auditBody.appendChild(row([a.sequence, new Date(a.at).toLocaleString(), a.actor, a.action, a.subject]));
+      }
+    } catch (err) { /* audit read is security-read; leave table empty if denied */ }
 
     const nodesBody = document.querySelector("#nodesTable tbody");
     nodesBody.innerHTML = "";
     for (const n of snapshot.nodes) {
       const actions = document.createElement("span");
-      actions.style.display = "flex"; actions.style.gap = "6px";
+      actions.style.display = "flex"; actions.style.gap = "6px"; actions.style.flexWrap = "wrap";
       actions.appendChild(actionButton("Quarantine", async () => {
         const values = await openForm({
           title: "Quarantine Node",
@@ -352,7 +494,56 @@ async function refresh() {
           refresh();
         } catch (err) { setStatus(err.message, true); }
       }));
-      nodesBody.appendChild(row([n.id.slice(0, 8), n.zone, n.nodeType, n.active ? "yes" : "no", actions]));
+      actions.appendChild(actionButton("Kill Switch", async () => {
+        const values = await openForm({
+          title: "Set Kill Switch",
+          description: `Node ${n.id.slice(0, 8)}`,
+          confirmLabel: "Send",
+          fields: [{name: "enabled", label: "Enable kill switch", type: "checkbox", value: false}]
+        });
+        if (!values) return;
+        try {
+          await api(`/api/v1/nodes/${n.id}/kill-switch`, { method: "POST", body: JSON.stringify({ enabled: values.enabled }) });
+          setStatus(`Kill switch command queued (${values.enabled ? "enable" : "disable"}).`, false);
+        } catch (err) { setStatus(err.message, true); }
+      }));
+      actions.appendChild(actionButton("Set DNS", async () => {
+        const values = await openForm({
+          title: "Push DNS Servers",
+          description: `Node ${n.id.slice(0, 8)}`,
+          confirmLabel: "Send",
+          fields: [{name: "servers", label: "DNS servers (comma-separated)", type: "text", placeholder: "1.1.1.1, 9.9.9.9", minLength: 1}]
+        });
+        if (!values) return;
+        try {
+          const servers = values.servers.split(",").map(s => s.trim()).filter(Boolean);
+          await api(`/api/v1/nodes/${n.id}/dns`, { method: "POST", body: JSON.stringify({ servers }) });
+          setStatus("DNS command queued.", false);
+        } catch (err) { setStatus(err.message, true); }
+      }));
+      actions.appendChild(actionButton("Set Region", async () => {
+        const values = await openForm({
+          title: "Set Node Region",
+          description: `Node ${n.id.slice(0, 8)} — current: ${n.region || "unassigned"}`,
+          confirmLabel: "Save",
+          fields: [{name: "region", label: "Region (e.g. us-east-1)", type: "text", minLength: 1}]
+        });
+        if (!values) return;
+        try {
+          await api(`/api/v1/nodes/${n.id}/region`, { method: "PUT", body: JSON.stringify({ region: values.region }) });
+          refresh();
+        } catch (err) { setStatus(err.message, true); }
+      }));
+      actions.appendChild(actionButton("Reconcile", async () => {
+        try {
+          const result = await api(`/api/v1/nodes/${n.id}/reconcile`, { method: "POST" });
+          const drifted = result.checked.filter(c => c.drifted);
+          setStatus(drifted.length
+            ? `Drift corrected: ${drifted.map(d => d.dimension).join(", ")}`
+            : "No drift detected — node matches desired state.", false);
+        } catch (err) { setStatus(err.message, true); }
+      }));
+      nodesBody.appendChild(row([n.id.slice(0, 8), n.zone, n.region || "unassigned", n.nodeType, n.active ? "yes" : "no", actions]));
     }
 
     const eventsBody = document.querySelector("#eventsTable tbody");
@@ -362,6 +553,8 @@ async function refresh() {
       sev.className = `sev-${e.severity}`; sev.textContent = e.severity;
       eventsBody.appendChild(row([new Date(e.at).toLocaleString(), sev, e.engine, e.type, e.description]));
     }
+
+    await refreshRollout();
   } catch (err) {
     setStatus(err.message, true);
   }
@@ -435,6 +628,55 @@ document.getElementById("newRelay").onclick = async () => {
       ...(values.region ? { region: values.region } : {}), instanceType: values.instanceType
     }) });
     setStatus(`Relay provisioned: ${result.endpoint}`, false);
+    refresh();
+  } catch (err) { setStatus(err.message, true); }
+};
+
+// SafeApplyService.apply had no UI trigger at all — an operator could only
+// invoke it by calling the REST API directly. This blocks on the real
+// per-node verification window (src/application/safe-apply.ts) the same way
+// the API call itself does, so a COMMITTED/ROLLED_BACK result here reflects
+// real node acknowledgements, not just "the request returned".
+document.getElementById("applyPolicies").onclick = async () => {
+  const values = await openForm({
+    title: "Apply Active Policies",
+    description: "Pushes the currently-active policy set to every active node as a real firewall commit, verifying each node's own acknowledgement before committing — auto-rolling back if too many fail or time out.",
+    confirmLabel: "Apply",
+    fields: [{name: "timeoutMs", label: "Verification window (ms, 5000-300000)", type: "text", value: "60000"}]
+  });
+  if (!values) return;
+  try {
+    setStatus("Applying policy — waiting for node acknowledgements...", false);
+    const result = await api("/api/v1/policies/apply", { method: "POST", body: JSON.stringify({ timeoutMs: Number(values.timeoutMs) || 60000 }) });
+    lastRolloutCommitId = result.commitId;
+    setStatus(`Policy rollout ${result.status}${result.reason ? " — " + result.reason : ""}.`, result.status !== "COMMITTED");
+    refresh();
+  } catch (err) { setStatus(err.message, true); }
+};
+
+document.getElementById("verifyAudit").onclick = async () => {
+  try {
+    const result = await api("/api/v1/audit/verify");
+    setStatus(result.valid ? "Audit chain verified intact." : "AUDIT CHAIN TAMPERED — hash chain does not verify.", !result.valid);
+  } catch (err) { setStatus(err.message, true); }
+};
+
+document.getElementById("newCheckpoint").onclick = async () => {
+  const values = await openForm({
+    title: "Create Recovery Checkpoint",
+    description: "Pushes a document to the out-of-band recovery channel and records it as the new last-known-good for this scope. Refused if the OOB channel is unhealthy.",
+    confirmLabel: "Checkpoint",
+    wide: true,
+    fields: [
+      {name: "scope", label: "Scope (e.g. mesh-policy)", type: "text", minLength: 1},
+      {name: "document", label: "Document JSON", type: "textarea", rows: 8, value: "{}"}
+    ]
+  });
+  if (!values) return;
+  try {
+    const document = JSON.parse(values.document);
+    const snapshot = await api("/api/v1/oob/checkpoint", { method: "POST", body: JSON.stringify({ scope: values.scope, document }) });
+    setStatus(`Checkpoint recorded (${snapshot.id.slice(0, 8)}).`, false);
     refresh();
   } catch (err) { setStatus(err.message, true); }
 };
