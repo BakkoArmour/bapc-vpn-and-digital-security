@@ -10,6 +10,12 @@ export interface PlatformAdapter {
   // push topology changes (peer joined, peer's key rotated) without a full
   // re-initialization.
   applyPeers(peers:Array<{publicKey:string;endpoint?:string;allowedIps:string[];keepaliveSeconds:number}>):Promise<void>;
+  // Rotates ONLY this node's own private key on an interface that's already
+  // up — never touches peers, addresses, or listen-port, so a threat-
+  // triggered identity rotation doesn't need to know or resupply any of
+  // that. Complements applyPeers exactly the way `wg set` supports setting
+  // private-key and peers independently.
+  rotatePrivateKey(privateKeyReference:string):Promise<void>;
   applyFirewall(input:{
     commitId:string;defaultAction:"DENY";rules:Array<{
       id:string;action:"ALLOW"|"DENY";protocols:string[];ports:number[];

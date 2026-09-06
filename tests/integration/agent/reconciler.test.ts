@@ -92,7 +92,7 @@ test("reconcile clears transient credentials and throws on an integrity mismatch
 test("ProductionAgent dispatches a RECONCILE command to the configured AgentReconciler",async()=>{
   const platform:PlatformAdapter={
     platform:"linux",
-    async applyWireGuard(){},async applyPeers(){},async applyFirewall(){},async rollbackFirewall(){},
+    async applyWireGuard(){},async applyPeers(){},async rotatePrivateKey(){},async applyFirewall(){},async rollbackFirewall(){},
     async setKillSwitch(){},async setDns(){},async isolate(){},async restore(){},
     async collectPosture(){return {osCurrent:true,diskEncrypted:true,secureBoot:true,firewallEnabled:true,agentHealthy:true,bannedProcessFound:false};}
   };
@@ -112,7 +112,7 @@ test("ProductionAgent dispatches a RECONCILE command to the configured AgentReco
 test("ProductionAgent fails a RECONCILE command cleanly when no reconciler is configured",async()=>{
   const platform:PlatformAdapter={
     platform:"linux",
-    async applyWireGuard(){},async applyPeers(){},async applyFirewall(){},async rollbackFirewall(){},
+    async applyWireGuard(){},async applyPeers(){},async rotatePrivateKey(){},async applyFirewall(){},async rollbackFirewall(){},
     async setKillSwitch(){},async setDns(){},async isolate(){},async restore(){},
     async collectPosture(){return {osCurrent:true,diskEncrypted:true,secureBoot:true,firewallEnabled:true,agentHealthy:true,bannedProcessFound:false};}
   };

@@ -21,6 +21,7 @@ export class ApplePlatformAdapter implements PlatformAdapter {
   constructor(platform:"macos"|"ios"|"ipados"){this.platform=platform;}
   async applyWireGuard():Promise<void>{throw new Error(NOT_IMPLEMENTED);}
   async applyPeers():Promise<void>{throw new Error(NOT_IMPLEMENTED);}
+  async rotatePrivateKey():Promise<void>{throw new Error(NOT_IMPLEMENTED);}
   async applyFirewall():Promise<void>{throw new Error(NOT_IMPLEMENTED);}
   async rollbackFirewall():Promise<void>{throw new Error(NOT_IMPLEMENTED);}
   async setKillSwitch():Promise<void>{throw new Error(NOT_IMPLEMENTED);}

@@ -1,6 +1,6 @@
-import {generateKeyPairSync} from "node:crypto";
 import forge from "node-forge";
 import type {PlatformAdapter} from "../../native/shared/platform-adapter.js";
+import {generateWireGuardKeyPair} from "../../native/shared/wireguard-keys.js";
 
 // The gap this closes: nothing in this repository ever brought a new node's
 // WireGuard interface up in the first place. agent.ts assumes BAPC_NODE_ID
@@ -28,20 +28,7 @@ export interface EnrollNodeResult {
   identityPrivateKeyPem:string;certificatePem:string;
 }
 
-// Real X25519 keypair generation via Node's own crypto module — WireGuard
-// keys ARE raw 32-byte X25519 keys, base64-encoded, so this needs no `wg`
-// binary and no hand-rolled crypto: generateKeyPairSync('x25519') already
-// produces a spec-compliant keypair, exported here as JWK purely to reach
-// the raw key bytes without hand-parsing DER offsets.
-export const generateWireGuardKeyPair=():{privateKey:string;publicKey:string}=>{
-  const {publicKey,privateKey}=generateKeyPairSync("x25519");
-  const pub=publicKey.export({format:"jwk"}) as {x:string};
-  const priv=privateKey.export({format:"jwk"}) as {x:string;d:string};
-  return {
-    publicKey:Buffer.from(pub.x,"base64url").toString("base64"),
-    privateKey:Buffer.from(priv.d,"base64url").toString("base64")
-  };
-};
+export {generateWireGuardKeyPair};
 
 // Real self-signed PKCS#10 CSR — proof of possession for the RSA identity
 // key this node will use to sign future RotatePeerKey requests (see

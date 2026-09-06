@@ -31,6 +31,7 @@ class FakePlatform implements PlatformAdapter {
   applyWireGuardCalls:unknown[]=[];
   async applyWireGuard(input:unknown){this.applyWireGuardCalls.push(input);}
   async applyPeers(){}
+  async rotatePrivateKey(){}
   async applyFirewall(){}
   async rollbackFirewall(){}
   async setKillSwitch(){}

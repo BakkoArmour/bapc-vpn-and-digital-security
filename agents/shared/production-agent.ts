@@ -1,6 +1,9 @@
 import {createHash} from "node:crypto";
 import type {PlatformAdapter} from "../../native/shared/platform-adapter.js";
+import {generateWireGuardKeyPair} from "../../native/shared/wireguard-keys.js";
 import type {AgentReconciler} from "../../src/agent/reconciler.js";
+import type {MeshRotationClient} from "../../services/mesh-controller/grpc-rotation-client.js";
+import type {IdentitySigner} from "./identity-signer.js";
 
 export interface AgentController {
   heartbeat(input:{
@@ -17,7 +20,17 @@ export class ProductionAgent {
     // Optional: only set when `platform` also implements AgentPlatform (the
     // concrete Linux/Windows adapters do). Handles a "RECONCILE" command —
     // route-integrity monitoring/restoration, feature catalog items #56-60.
-    private reconciler?:AgentReconciler
+    private reconciler?:AgentReconciler,
+    // Optional: only set when the control plane might ever send
+    // ROTATE_IDENTITY_REQUIRED (ThreatEngine's emergency-tier response to a
+    // correlated threat). Deliberately never a server-side rotation: the
+    // server has never held and must never hold this node's private key
+    // (see src/api/grpc/server.ts's verifyRotationSignature) — the node
+    // generates its own replacement key and signs the rotation request
+    // itself, through the exact same RotatePeerKey flow a voluntary
+    // rotation uses.
+    private rotationClient?:MeshRotationClient,
+    private identitySigner?:IdentitySigner
   ){}
   stop(){this.stopped=true;}
   async run(){
@@ -43,6 +56,20 @@ export class ProductionAgent {
         case "ROLLBACK_FIREWALL": await this.platform.rollbackFirewall(c.payload.commitId);break;
         case "QUARANTINE": await this.platform.isolate(c.payload.reason??"controller quarantine");break;
         case "RESTORE": await this.platform.restore();break;
+        case "ROTATE_IDENTITY_REQUIRED": {
+          if(!this.rotationClient||!this.identitySigner){
+            throw new Error("ROTATE_IDENTITY_REQUIRED received but no MeshRotationClient/IdentitySigner is configured");
+          }
+          const wg=generateWireGuardKeyPair();
+          const signature=this.identitySigner.sign(this.nodeId,wg.publicKey);
+          const result=await this.rotationClient.rotatePeerKey(this.nodeId,wg.publicKey,signature);
+          if(!result.acknowledged)throw new Error("mesh rejected the identity rotation");
+          await this.platform.rotatePrivateKey(wg.privateKey);
+          await this.controller.acknowledge(c.id,{
+            ok:true,at:new Date().toISOString(),newPublicKey:wg.publicKey,effectiveEpoch:result.effectiveEpoch
+          });
+          return;
+        }
         case "RECONCILE": {
           if(!this.reconciler)throw new Error("RECONCILE command received but no AgentReconciler is configured");
           const result=await this.reconciler.reconcile(c.payload);

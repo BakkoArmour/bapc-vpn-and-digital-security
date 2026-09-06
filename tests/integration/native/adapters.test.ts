@@ -95,6 +95,20 @@ test("LinuxPlatformAdapter.applyPeers rejects a malformed peer key",async()=>{
   await assert.rejects(()=>adapter.applyPeers([{publicKey:"not-a-real-key",allowedIps:["10.0.0.2/32"],keepaliveSeconds:25}]),/invalid peer public key/);
 });
 
+test("LinuxPlatformAdapter.rotatePrivateKey sets only the private key, touching no peers/addresses",async()=>{
+  const {run,calls}=fakeRunner({
+    which:()=>({stdout:"/usr/bin/wg",stderr:""}),
+    wg:()=>({stdout:"",stderr:""})
+  });
+  const adapter=new LinuxPlatformAdapter("bapc0",run);
+  await adapter.rotatePrivateKey("new-private-key-material");
+  const wgCall=calls.find(c=>c.cmd==="wg");
+  assert.ok(wgCall);
+  assert.deepEqual(wgCall!.args.slice(0,3),["set","bapc0","private-key"]);
+  assert.equal(readFileSync(wgCall!.args[3]!,"utf8"),"new-private-key-material");
+  assert.equal(calls.some(c=>c.cmd==="ip"),false);
+});
+
 test("LinuxPlatformAdapter.applyFirewall writes an nft ruleset and applies it",async()=>{
   const {run,calls}=fakeRunner({
     which:()=>({stdout:"/usr/sbin/nft",stderr:""}),
@@ -250,6 +264,16 @@ test("WindowsPlatformAdapter.applyPeers syncs the full peer set via wg.exe syncc
   assert.equal(calls.some(c=>c.cmd==="wireguard.exe"),false);
 });
 
+test("WindowsPlatformAdapter.rotatePrivateKey sets only the private key via wg.exe",async()=>{
+  const {run,calls}=fakeRunner({"wg.exe":()=>({stdout:"",stderr:""})});
+  const adapter=new WindowsPlatformAdapter("BAPC",run);
+  await adapter.rotatePrivateKey("new-private-key-material");
+  const wgCall=calls.find(c=>c.cmd==="wg.exe");
+  assert.ok(wgCall);
+  assert.deepEqual(wgCall!.args.slice(0,3),["set","BAPC","private-key"]);
+  assert.equal(readFileSync(wgCall!.args[3]!,"utf8"),"new-private-key-material");
+});
+
 test("WindowsPlatformAdapter.applyFirewall passes rules to apply.ps1 as a JSON payload file",async()=>{
   const {run,calls}=fakeRunner({
     "powershell.exe":(args)=>{
@@ -283,5 +307,6 @@ test("ApplePlatformAdapter throws NotImplemented rather than silently succeeding
   const adapter:PlatformAdapter=new ApplePlatformAdapter("ios");
   await assert.rejects(()=>adapter.applyWireGuard({privateKeyReference:"x",addresses:[],peers:[]}),/NetworkExtension/);
   await assert.rejects(()=>adapter.applyPeers([]),/NetworkExtension/);
+  await assert.rejects(()=>adapter.rotatePrivateKey("x"),/NetworkExtension/);
   await assert.rejects(()=>adapter.collectPosture(),/NetworkExtension/);
 });

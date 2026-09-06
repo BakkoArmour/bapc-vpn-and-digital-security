@@ -39,6 +39,10 @@ import {PgRelayStore} from "../../services/relay-fleet/pg-relay-store.js";
 import {OobController} from "../../services/oob-controller/controller.js";
 import {HttpOobChannel} from "../../services/oob-controller/http-channel.js";
 import {PgRecoveryStore} from "../../services/oob-controller/pg-recovery-store.js";
+import {ThreatEngine, type ThreatSignal} from "../../services/threat-engine/engine.js";
+import {ThreatCorrelator} from "../../services/threat-engine/correlator.js";
+import {PgThreatActionPort} from "../../services/threat-engine/pg-threat-action-port.js";
+import {PgIncidentPort} from "../../services/threat-engine/pg-incident-port.js";
 import type {NetworkPolicy} from "../domain/types.js";
 
 await hydrateSecretsFromAws();
@@ -90,6 +94,21 @@ const certificateIssuer=new TrustCoreCertificateIssuer(new TrustCoreIssuer(
 const threatResponse=new ThreatResponseService(
   repo,repo,repo,repo,enforcer,certificateIssuer,bus,new NoopThreatSink(),clearance
 );
+
+// ThreatEngine/ThreatCorrelator existed fully built and tested (sliding-
+// window correlation of repeated weak signals into an escalating
+// evaluation) with no caller anywhere — ThreatResponseService above scores
+// one event at a time and has no memory across calls, so "5 weak signals in
+// 2 minutes" never became anything more than 5 separate low-severity
+// results. rotateMeshIdentity is the one action that can't just delegate to
+// an existing real implementation: see PgThreatActionPort's own comment for
+// why it enqueues a command instead of rotating anything itself.
+const threatActionPort=new PgThreatActionPort(repo,repo,enforcer,certificateStore,commandQueue,bus);
+const incidentPort=new PgIncidentPort(db,repo,ids,clock);
+const threatEngine=new ThreatEngine(threatActionPort,incidentPort);
+const threatCorrelator=new ThreatCorrelator(threatEngine,300_000,{
+  record:async(nodeId,dismissedBy,signalCount)=>{await audit.record(dismissedBy,"THREAT_DISMISSED",nodeId,{signalCount});}
+});
 
 // OobController/PgRecoveryStore/HttpOobChannel existed fully built and
 // tested with no caller anywhere — docs/INCIDENT-RESPONSE-RUNBOOK.md's
@@ -257,9 +276,40 @@ router.add("POST","/api/v1/agent/heartbeat",["security-agent"],async({body})=>{
     bytesTransmitted:Number(body.bytesTransmitted??0),bytesReceived:Number(body.bytesReceived??0),
     agentVersion:String(body.agentVersion??"unknown")
   });
+  // A single posture failure is rarely urgent on its own — a transient
+  // firewall toggle, a delayed OS update — but repeated ones from the same
+  // node are exactly the "weak signal, correlate over time" case
+  // ThreatCorrelator exists for. weight:15/confidence:1 matches the profile
+  // already covered by ThreatCorrelator's own tests: 5 within the window
+  // reach CRITICAL (score 75), any single one alone stays INFO (15).
+  if(!accepted.compliant){
+    await threatCorrelator.ingest({
+      nodeId:String(body.nodeId),kind:"posture_failure",confidence:1,weight:15,
+      at:clock.now(),metadata:{posture:body.posture}
+    });
+  }
   const commands=await commandQueue.pending(String(body.nodeId));
   return {...accepted,commands};
 });
+
+// A general-purpose ingestion point for anything else that produces a weak
+// security signal but runs as its own process and so can't call
+// threatCorrelator.ingest() in-process — DNS sinkhole hits
+// (src/runtime/dns-server.ts), repeated access-decide denials, etc.
+router.add("POST","/api/v1/threats/signal",["security-agent"],async({body})=>{
+  const signal:ThreatSignal={
+    ...(body.nodeId?{nodeId:String(body.nodeId)}:{}),
+    kind:String(body.kind??"unknown"),
+    confidence:Math.max(0,Math.min(1,Number(body.confidence??1))),
+    weight:Math.max(0,Number(body.weight??10)),
+    at:clock.now(),metadata:typeof body.metadata==="object"&&body.metadata?body.metadata:{}
+  };
+  return threatCorrelator.ingest(signal);
+},{rateLimit:{limit:120,windowMs:60_000}});
+
+router.add("POST","/api/v1/threats/:nodeId/dismiss",["security-approver"],async({claims,params})=>
+  threatCorrelator.dismiss(params.nodeId!,claims.sub)
+);
 
 router.add("POST","/api/v1/agent/commands/:id/ack",["security-agent"],async({params,body})=>{
   await commandQueue.acknowledge(params.id!,body.result);

@@ -35,7 +35,11 @@ if [[ ! -f "${CONFIG_DIR}/agent.env" ]]; then
 # below automatically.
 NODE_ENV=production
 # BAPC_CONTROLLER_URL=https://security-control.internal
+# Both of these are needed only for ROTATE_IDENTITY_REQUIRED (a threat-
+# triggered identity rotation the node performs itself — see
+# agents/shared/production-agent.ts). Everything else works without them.
 # BAPC_CONTROLLER_GRPC_URL=security-control.internal:50051
+# BAPC_IDENTITY_KEY_PATH=/etc/bapc-security/identity-key.pem
 # BAPC_AGENT_VERSION=0.4.0
 # BAPC_AGENT_TOKEN=... (issued out of band — enrollment does not mint this)
 EOF

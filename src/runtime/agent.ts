@@ -1,5 +1,8 @@
+import {existsSync} from "node:fs";
 import {ProductionAgent} from "../../agents/shared/production-agent.js";
 import {RestAgentController} from "../../services/mesh-controller/rest-agent-controller.js";
+import {GrpcMeshRotationClient} from "../../services/mesh-controller/grpc-rotation-client.js";
+import {FileIdentitySigner} from "../../agents/shared/identity-signer.js";
 import {LinuxPlatformAdapter} from "../../native/linux/adapter.js";
 import {WindowsPlatformAdapter} from "../../native/windows/adapter.js";
 import type {PlatformAdapter} from "../../native/shared/platform-adapter.js";
@@ -32,7 +35,19 @@ try{
   );
 
   const controller=new RestAgentController(controllerUrl,agentToken);
-  const agent=new ProductionAgent(nodeId,agentVersion,platform,controller,intervalMs,reconciler);
+
+  // Both optional: ROTATE_IDENTITY_REQUIRED (ThreatEngine's emergency-tier
+  // response) only works when the agent knows where to reach the gRPC mesh
+  // service and where enroll.ts wrote this node's identity private key. If
+  // either is missing, the agent still runs fine — that one command type
+  // fails cleanly with a clear error (see ProductionAgent.execute) instead
+  // of anything else being affected.
+  const controllerGrpcUrl=process.env.BAPC_CONTROLLER_GRPC_URL;
+  const identityKeyPath=process.env.BAPC_IDENTITY_KEY_PATH;
+  const rotationClient=controllerGrpcUrl?new GrpcMeshRotationClient(controllerGrpcUrl):undefined;
+  const identitySigner=(identityKeyPath&&existsSync(identityKeyPath))?new FileIdentitySigner(identityKeyPath):undefined;
+
+  const agent=new ProductionAgent(nodeId,agentVersion,platform,controller,intervalMs,reconciler,rotationClient,identitySigner);
 
   process.on("SIGTERM",()=>{agent.stop();process.exit(0);});
   process.on("SIGINT",()=>{agent.stop();process.exit(0);});

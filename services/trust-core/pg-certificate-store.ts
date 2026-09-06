@@ -25,6 +25,21 @@ export class PgCertificateStore implements CertificateRecordStore {
       [serial,reason,at]
     );
   }
+  // Threat response needs to revoke a compromised node's certificate by
+  // node id, but revoke() only takes a serial — nothing looked one up by
+  // node before. Most-recently-issued, non-revoked certificate for the
+  // node; a node only ever has one active certificate at a time in
+  // practice (re-enrollment issues a fresh one rather than adding a
+  // second), but ORDER BY + LIMIT 1 makes that explicit rather than
+  // assumed.
+  async activeCertificateFor(nodeId:string):Promise<{serial:string}|undefined>{
+    const r=await this.db.query(
+      `SELECT serial_number FROM bapc_security_core.certificates
+       WHERE node_id=$1 AND is_revoked=false ORDER BY issued_at DESC LIMIT 1`,
+      [nodeId]
+    );
+    return r.rows[0]?{serial:r.rows[0].serial_number}:undefined;
+  }
   async expiringWithin(days:number){
     const r=await this.db.query(
       `SELECT cert_id,node_id,serial_number,subject_dn,expires_at

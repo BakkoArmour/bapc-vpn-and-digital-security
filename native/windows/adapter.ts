@@ -82,6 +82,16 @@ export class WindowsPlatformAdapter implements PlatformAdapter, AgentPlatform {
     await this.run("wg.exe",["syncconf",this.interfaceAlias,confPath]);
   }
 
+  // `wg.exe set <alias> private-key <file>` alone — never touches peers,
+  // addresses, or listen-port. See the Linux adapter's rotatePrivateKey
+  // comment for why nothing else needs to be resupplied here.
+  async rotatePrivateKey(privateKeyReference:string):Promise<void>{
+    const dir=mkdtempSync(join(tmpdir(),"bapc-wg-rotate-"));
+    const keyPath=join(dir,"private.key");
+    writeFileSync(keyPath,privateKeyReference);
+    await this.run("wg.exe",["set",this.interfaceAlias,"private-key",keyPath]);
+  }
+
   async applyFirewall(input:{
     commitId:string;defaultAction:"DENY";
     rules:Array<{id:string;action:"ALLOW"|"DENY";protocols:string[];ports:number[];sourceZones:string[];destinationZones:string[];}>;

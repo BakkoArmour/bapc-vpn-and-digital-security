@@ -98,6 +98,18 @@ export class LinuxPlatformAdapter implements PlatformAdapter, AgentPlatform {
     await this.run("wg",["syncconf",this.iface,confPath]);
   }
 
+  // `wg set <iface> private-key <file>` alone — never touches peers,
+  // addresses, or listen-port. Used for a threat-triggered identity
+  // rotation (ROTATE_IDENTITY_REQUIRED): the node already knows its own
+  // current peers/addresses, so there's nothing to resupply here.
+  async rotatePrivateKey(privateKeyReference:string):Promise<void>{
+    await this.requireBinary("wg");
+    const dir=mkdtempSync(join(tmpdir(),"bapc-wg-rotate-"));
+    const keyPath=join(dir,"private.key");
+    writeFileSync(keyPath,privateKeyReference,{mode:0o600});
+    await this.run("wg",["set",this.iface,"private-key",keyPath]);
+  }
+
   async applyFirewall(input:{
     commitId:string;defaultAction:"DENY";rules:Array<{
       id:string;action:"ALLOW"|"DENY";protocols:string[];ports:number[];

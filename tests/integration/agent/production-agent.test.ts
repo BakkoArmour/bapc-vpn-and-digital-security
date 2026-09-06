@@ -13,6 +13,7 @@ class FakePlatform implements PlatformAdapter {
   calls:Array<{method:string;args:unknown[]}>=[];
   async applyWireGuard(...args:unknown[]){this.calls.push({method:"applyWireGuard",args});}
   async applyPeers(...args:unknown[]){this.calls.push({method:"applyPeers",args});}
+  async rotatePrivateKey(...args:unknown[]){this.calls.push({method:"rotatePrivateKey",args});}
   async applyFirewall(...args:unknown[]){this.calls.push({method:"applyFirewall",args});}
   async rollbackFirewall(...args:unknown[]){this.calls.push({method:"rollbackFirewall",args});}
   async setKillSwitch(...args:unknown[]){this.calls.push({method:"setKillSwitch",args});}
@@ -76,4 +77,69 @@ test("ProductionAgent.execute acknowledges an unsupported command type with a fa
   assert.equal(platform.calls.length,0);
   assert.equal((controller.acked[0]!.result as any).ok,false);
   assert.match((controller.acked[0]!.result as any).error,/unsupported controller command/);
+});
+
+// ROTATE_IDENTITY_REQUIRED (ThreatEngine's emergency-tier response) must
+// never rotate server-side — the server never holds this node's private
+// key. The node generates its own replacement key, signs the rotation
+// itself with its enrolled identity key, and only then rotates its local
+// interface. These pin down that whole chain, and that a rejected rotation
+// never touches the local interface at all.
+class FakeRotationClient {
+  calls:Array<{nodeId:string;newPublicKey:string;signature:Buffer}>=[];
+  constructor(private response:{acknowledged:boolean;effectiveEpoch:number}){}
+  async rotatePeerKey(nodeId:string,newPublicKey:string,signature:Buffer){
+    this.calls.push({nodeId,newPublicKey,signature});
+    return this.response;
+  }
+}
+class FakeIdentitySigner {
+  calls:Array<{nodeId:string;newPublicKey:string}>=[];
+  sign(nodeId:string,newPublicKey:string){this.calls.push({nodeId,newPublicKey});return Buffer.from("fake-signature");}
+}
+
+test("ProductionAgent.execute rotates locally only after the server acknowledges a signed rotation",async()=>{
+  const platform=new FakePlatform();
+  const controller=new FakeController([{id:"cmd-5",type:"ROTATE_IDENTITY_REQUIRED",payload:{}}]);
+  const rotationClient=new FakeRotationClient({acknowledged:true,effectiveEpoch:3});
+  const identitySigner=new FakeIdentitySigner();
+  const agent=new ProductionAgent("node-1","0.4.0",platform,controller,5,undefined,rotationClient as any,identitySigner as any);
+  const run=agent.run();
+  await new Promise(r=>setTimeout(r,20));
+  agent.stop();
+  await run;
+
+  assert.equal(rotationClient.calls.length,1);
+  assert.equal(rotationClient.calls[0]!.nodeId,"node-1");
+  assert.equal(identitySigner.calls.length,1);
+  assert.equal(identitySigner.calls[0]!.newPublicKey,rotationClient.calls[0]!.newPublicKey);
+  assert.equal(platform.calls.length,1);
+  assert.equal(platform.calls[0]!.method,"rotatePrivateKey");
+  const acked=controller.acked[0]!.result as any;
+  assert.equal(acked.ok,true);
+  assert.equal(acked.newPublicKey,rotationClient.calls[0]!.newPublicKey);
+  assert.equal(acked.effectiveEpoch,3);
+});
+
+test("ProductionAgent.execute never touches the local interface if the server rejects the rotation",async()=>{
+  const platform=new FakePlatform();
+  const controller=new FakeController([{id:"cmd-6",type:"ROTATE_IDENTITY_REQUIRED",payload:{}}]);
+  const rotationClient=new FakeRotationClient({acknowledged:false,effectiveEpoch:0});
+  const identitySigner=new FakeIdentitySigner();
+  const agent=new ProductionAgent("node-1","0.4.0",platform,controller,5,undefined,rotationClient as any,identitySigner as any);
+  const run=agent.run();
+  await new Promise(r=>setTimeout(r,20));
+  agent.stop();
+  await run;
+
+  assert.equal(platform.calls.length,0);
+  assert.equal((controller.acked[0]!.result as any).ok,false);
+});
+
+test("ProductionAgent.execute fails cleanly when ROTATE_IDENTITY_REQUIRED arrives with no rotation client/signer configured",async()=>{
+  const platform=new FakePlatform();
+  const controller=new FakeController([{id:"cmd-7",type:"ROTATE_IDENTITY_REQUIRED",payload:{}}]);
+  await runOneHeartbeat(platform,controller);
+  assert.equal(platform.calls.length,0);
+  assert.match((controller.acked[0]!.result as any).error,/no MeshRotationClient\/IdentitySigner is configured/);
 });
