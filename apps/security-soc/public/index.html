@@ -99,6 +99,11 @@
   </div>
 
   <div class="card">
+    <h2>Revoked Certificates</h2>
+    <table id="revokedCertsTable"><thead><tr><th>Serial</th><th>Subject</th><th>Revoked</th><th>Reason</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
     <h2>Relays <button class="action" id="newRelay" style="float:right">Provision Relay</button></h2>
     <table id="relaysTable"><thead><tr><th>Region</th><th>Endpoint</th><th>Load%</th><th>Cap%</th><th>Sessions</th><th>Latency</th><th>Up</th><th>Actions</th></tr></thead><tbody></tbody></table>
   </div>
@@ -392,6 +397,16 @@ async function refresh() {
       if (soon) cell.className = "sev-WARN";
       cell.textContent = expires.toLocaleDateString();
       certsBody.appendChild(row([c.serial_number, c.subject_dn, cell]));
+    }
+
+    const revokedCertsBody = document.querySelector("#revokedCertsTable tbody");
+    revokedCertsBody.innerHTML = "";
+    for (const c of (full.revokedCertificates || []).slice(0, 20)) {
+      revokedCertsBody.appendChild(row([
+        c.serial_number, c.subject_dn,
+        c.revoked_at ? new Date(c.revoked_at).toLocaleString() : "-",
+        c.revocation_reason || "-"
+      ]));
     }
 
     const relaysBody = document.querySelector("#relaysTable tbody");

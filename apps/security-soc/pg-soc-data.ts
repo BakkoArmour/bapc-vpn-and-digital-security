@@ -42,6 +42,14 @@ export class PgSocData implements SocData {
       FROM bapc_security_core.certificates WHERE is_revoked=false ORDER BY expires_at LIMIT 200`);
     return r.rows;
   }
+  // revocation_reason is authenticated-audience-only: certificates() above
+  // and the public CRL endpoint both deliberately withhold it — see
+  // SocData.revokedCertificates' own comment.
+  async revokedCertificates(){
+    const r=await this.db.query(`SELECT cert_id,node_id,serial_number,subject_dn,revoked_at,revocation_reason
+      FROM bapc_security_core.certificates WHERE is_revoked=true ORDER BY revoked_at DESC LIMIT 200`);
+    return r.rows;
+  }
   async events(limit:number){
     const r=await this.db.query(`SELECT event_id,node_id,event_timestamp,severity,engine_source,event_type,description
       FROM bapc_security_core.security_events ORDER BY event_timestamp DESC LIMIT $1`,[Math.max(1,Math.min(limit,500))]);

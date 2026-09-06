@@ -12,10 +12,42 @@ import {DiagnosticsClearanceVerifier, issueClearanceToken} from "../../../integr
 test("PgSocData issues the expected read-only SQL for every dashboard section",async()=>{
   const queries:string[]=[];
   const data=new PgSocData({query:async(text)=>{queries.push(text);return {rows:[]};}});
-  await Promise.all([data.nodes(),data.incidents(),data.policies(),data.jit(),data.relays(),data.certificates(),data.events(50)]);
+  await Promise.all([data.nodes(),data.incidents(),data.policies(),data.jit(),data.relays(),data.certificates(),data.revokedCertificates(),data.events(50)]);
   for(const table of ["mesh_nodes","incidents","network_policies","jit_grants","relays","certificates","security_events"]){
     assert.ok(queries.some(q=>q.includes(table)),`expected a query touching ${table}`);
   }
+});
+
+// certificates.revocation_reason had no read path anywhere — certificates()
+// deliberately excludes revoked rows, so an operator had no way to see why
+// a certificate was revoked short of querying Postgres directly.
+test("PgSocData.revokedCertificates selects revoked rows with their reason",async()=>{
+  const data=new PgSocData({query:async(text)=>({
+    rows:[{cert_id:"c1",node_id:"n1",serial_number:"01",subject_dn:"CN=n1",revoked_at:new Date(),revocation_reason:"emergency containment"}]
+  })});
+  const rows=await data.revokedCertificates();
+  assert.equal(rows[0].revocation_reason,"emergency containment");
+});
+
+test("SecuritySocBackend.snapshot includes revokedCertificates alongside the active certificate list",async()=>{
+  const {backend}=(()=>{
+    const store=new MemoryStore();
+    const enforcer=new InMemoryEnforcer();
+    const bus=new MemoryBus();
+    const ecosystem=new EcosystemIntegrationService(secrets,bus);
+    const clearance=new DiagnosticsClearanceVerifier(ecosystem);
+    const threatResponse=new ThreatResponseService(store,store,store,store,enforcer,new DevelopmentCertificateIssuer(),bus,new NoopThreatSink(),clearance);
+    const actions=new PgSocActions(threatResponse,store,store,enforcer,bus,new RandomIds(),new SystemClock());
+    return {backend:new SecuritySocBackend({
+      nodes:async()=>[],incidents:async()=>[],policies:async()=>[],jit:async()=>[],relays:async()=>[],
+      certificates:async()=>[{serial_number:"01",is_revoked:false}],
+      revokedCertificates:async()=>[{serial_number:"02",revocation_reason:"key compromised"}],
+      events:async()=>[]
+    },actions)};
+  })();
+  const snapshot=await backend.snapshot();
+  assert.deepEqual(snapshot.certificates,[{serial_number:"01",is_revoked:false}]);
+  assert.deepEqual(snapshot.revokedCertificates,[{serial_number:"02",revocation_reason:"key compromised"}]);
 });
 
 const secrets={diagnostics:"diagnostics-secret-at-least-32-characters",headquarters:"x",["cloud-deployment"]:"x",integration:"x"};
@@ -33,7 +65,7 @@ const buildBackend=()=>{
   const actions=new PgSocActions(threatResponse,store,store,enforcer,bus,ids,clock);
   const backend=new SecuritySocBackend({
     nodes:async()=>[],incidents:async()=>[],policies:async()=>[],jit:async()=>[],
-    relays:async()=>[],certificates:async()=>[],events:async()=>[]
+    relays:async()=>[],certificates:async()=>[],revokedCertificates:async()=>[],events:async()=>[]
   },actions);
   return {store,enforcer,bus,ecosystem,backend};
 };

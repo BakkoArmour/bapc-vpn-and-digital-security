@@ -5,6 +5,13 @@ export interface SocData {
   jit():Promise<unknown[]>;
   relays():Promise<unknown[]>;
   certificates():Promise<unknown[]>;
+  // certificates.revocation_reason (db/002_operational_tables.sql) had no
+  // read path anywhere — certificates() itself deliberately excludes
+  // revoked rows (WHERE is_revoked=false), and the public CRL endpoint
+  // (GET /api/v1/certificates/crl) must never leak this free-text reason to
+  // an unauthenticated relying party. This is the one place an operator can
+  // actually see why a certificate was revoked.
+  revokedCertificates():Promise<unknown[]>;
   events(limit:number):Promise<unknown[]>;
 }
 export interface SocActions {
@@ -20,11 +27,11 @@ export interface SocActions {
 export class SecuritySocBackend {
   constructor(private data:SocData,private actions:SocActions){}
   async snapshot(){
-    const [nodes,incidents,policies,jit,relays,certificates,events]=await Promise.all([
+    const [nodes,incidents,policies,jit,relays,certificates,revokedCertificates,events]=await Promise.all([
       this.data.nodes(),this.data.incidents(),this.data.policies(),this.data.jit(),
-      this.data.relays(),this.data.certificates(),this.data.events(100)
+      this.data.relays(),this.data.certificates(),this.data.revokedCertificates(),this.data.events(100)
     ]);
-    return {generatedAt:new Date(),nodes,incidents,policies,jit,relays,certificates,events};
+    return {generatedAt:new Date(),nodes,incidents,policies,jit,relays,certificates,revokedCertificates,events};
   }
   async quarantine(nodeId:string,reason:string,actor:string){
     if(reason.trim().length<12)throw new Error("quarantine reason must be meaningful");
