@@ -10,6 +10,8 @@ import {MeshController} from "../../services/mesh-controller/controller.js";
 import {PgMeshCommandSink} from "../../services/mesh-controller/pg-mesh-command-sink.js";
 import {PgRelayStore} from "../../services/relay-fleet/pg-relay-store.js";
 import {NodeReconciliationService} from "../application/node-reconciliation.js";
+import {KeyRotationSchedulerService} from "../application/key-rotation-scheduler.js";
+import {PgKeyRotationLedger} from "../../services/mesh-controller/pg-key-rotation-ledger.js";
 import {AuditService} from "../application/audit.js";
 import {SystemClock,Sha256} from "../infrastructure/memory.js";
 
@@ -50,11 +52,13 @@ const relayStore=new PgRelayStore(db);
 const meshController=new MeshController(new PgMeshCommandSink(commandQueue),relayStore);
 const nodeReconciliation=new NodeReconciliationService(repo,repo,desiredStateStore,commandQueue,meshController,db);
 const audit=new AuditService(repo,new Sha256(),new SystemClock());
+const keyRotationScheduler=new KeyRotationSchedulerService(new PgKeyRotationLedger(db),commandQueue,config.keyRotationDays);
 
 const outboxIntervalMs=Number(process.env.OUTBOX_FLUSH_INTERVAL_MS??5_000);
 const retentionIntervalMs=Number(process.env.RETENTION_INTERVAL_MS??3_600_000);
 const retentionMonths=Number(process.env.EVENT_RETENTION_MONTHS??13);
 const reconciliationIntervalMs=Number(process.env.RECONCILIATION_INTERVAL_MS??60_000);
+const keyRotationIntervalMs=Number(process.env.KEY_ROTATION_CHECK_INTERVAL_MS??86_400_000);
 const RECONCILIATION_ACTOR="system:maintenance-worker";
 
 let stopped=false;
@@ -105,8 +109,25 @@ const runReconciliationLoop=async()=>{
   }
 };
 
-console.log(JSON.stringify({event:"ready",service:"bapc-maintenance-worker",outboxIntervalMs,retentionIntervalMs,retentionMonths,reconciliationIntervalMs}));
-const loops=Promise.all([runOutboxLoop(),runRetentionLoop(),runReconciliationLoop()]);
+const runKeyRotationLoop=async()=>{
+  while(!stopped){
+    try{
+      const result=await keyRotationScheduler.run();
+      if(result.checked>0){
+        console.log(JSON.stringify({event:"key_rotation.requested",nodeIds:result.nodeIds}));
+        for(const nodeId of result.nodeIds){
+          await audit.record(RECONCILIATION_ACTOR,"KEY_ROTATION_REQUESTED",nodeId,{reason:`key not rotated within ${config.keyRotationDays} days`});
+        }
+      }
+    }catch(error){
+      console.error(JSON.stringify({event:"key_rotation.cycle_failed",error:error instanceof Error?error.message:String(error)}));
+    }
+    await new Promise(r=>setTimeout(r,keyRotationIntervalMs));
+  }
+};
+
+console.log(JSON.stringify({event:"ready",service:"bapc-maintenance-worker",outboxIntervalMs,retentionIntervalMs,retentionMonths,reconciliationIntervalMs,keyRotationIntervalMs}));
+const loops=Promise.all([runOutboxLoop(),runRetentionLoop(),runReconciliationLoop(),runKeyRotationLoop()]);
 
 const shutdown=async()=>{stopped=true;await loops;await db.close();process.exit(0);};
 process.on("SIGTERM",()=>void shutdown());

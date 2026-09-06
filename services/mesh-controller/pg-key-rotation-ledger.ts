@@ -37,4 +37,24 @@ export class PgKeyRotationLedger implements KeyRotationLedger {
     }
     throw new Error(`could not allocate a key-rotation epoch for node ${nodeId} after 5 attempts (concurrent rotations?)`);
   }
+
+  // KEY_ROTATION_DAYS (config.ts's keyRotationDays) was loaded and even
+  // validated at startup with nothing anywhere that ever compared a node's
+  // rotation history against it — see KeyRotationSchedulerService
+  // (src/application/key-rotation-scheduler.ts), the real periodic consumer
+  // this was missing. Only covers nodes that have rotated their identity key
+  // at least once: mesh_nodes carries no enrollment timestamp, so a node
+  // that has never rotated since initial enrollment has nothing in this
+  // table to compare against yet — a real, narrower limitation of this
+  // schema, not something worth fabricating a substitute timestamp for.
+  async nodesOverdueForRotation(maxAgeDays:number,now:Date):Promise<string[]>{
+    const r=await this.db.query(
+      `SELECT node_id FROM (
+         SELECT node_id, MAX(rotated_at) AS last_rotated
+         FROM bapc_security_core.key_rotations GROUP BY node_id
+       ) latest WHERE last_rotated < $2 - make_interval(days=>$1)`,
+      [maxAgeDays,now]
+    );
+    return r.rows.map((row:any)=>row.node_id);
+  }
 }
