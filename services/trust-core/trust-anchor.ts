@@ -22,14 +22,21 @@ export interface TrustAnchor {
 // the new anchor on next boot instead of certificates silently continuing to
 // reference a stale issuer.
 const ISSUER_NAME="bapc-trust-anchor";
-const upsertIssuerRow=async(db:PgQueryable,certificatePem:string,keyReference:string):Promise<string>=>{
+// is_active (db/002_operational_tables.sql) existed with no read path at
+// all — nothing ever checked it, so an operator had no way to hard-stop
+// issuance from this anchor short of pulling its key material. The WHERE
+// clause makes ON CONFLICT's UPDATE a no-op (and RETURNING empty) against a
+// row that's been explicitly deactivated, instead of silently reusing it.
+export const upsertIssuerRow=async(db:PgQueryable,certificatePem:string,keyReference:string):Promise<string>=>{
   const result=await db.query(
     `INSERT INTO bapc_security_core.certificate_issuers(name,certificate_pem,key_reference)
      VALUES($1,$2,$3)
      ON CONFLICT (name) DO UPDATE SET certificate_pem=EXCLUDED.certificate_pem,key_reference=EXCLUDED.key_reference
+     WHERE certificate_issuers.is_active
      RETURNING issuer_id`,
     [ISSUER_NAME,certificatePem,keyReference]
   );
+  if(!result.rows[0])throw new Error(`certificate issuer '${ISSUER_NAME}' has been deactivated — cannot issue or sign with it`);
   return result.rows[0].issuer_id;
 };
 
