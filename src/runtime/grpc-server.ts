@@ -59,7 +59,8 @@ const meshController=new MeshController(new PgMeshCommandSink(commandQueue),new 
 // rotation does.
 const enrollment=new EnrollmentService(
   repo,repo,repo,attestationVerifier,certificateIssuer,
-  new MeshControllerPeerDistributor(meshController),new RandomIds(),new SystemClock()
+  new MeshControllerPeerDistributor(meshController),new RandomIds(),new SystemClock(),
+  config.certificateTtlMinutes
 );
 
 const grpcServer=buildMeshGrpcServer({

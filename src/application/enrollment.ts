@@ -5,7 +5,12 @@ import type { AttestationVerifier, CertificateIssuer, Clock, IdGenerator, PeerDi
  
 export interface EnrollmentRequest { hostname:string; hardwareId:string; platform:Platform; osVersion:string; attestationQuote:Uint8Array; attestationPublicKey:string; wireGuardPublicKey:string; internalIpv4:string; internalIpv6:string; zone:SecurityZone; }
 export class EnrollmentService {
- constructor(private d:DeviceRepository,private n:NodeRepository,private u:UnitOfWork,private attest:AttestationVerifier,private certs:CertificateIssuer,private peers:PeerDistributor,private ids:IdGenerator,private clock:Clock){}
+ // CERTIFICATE_TTL_MINUTES (config.ts's certificateTtlMinutes) was loaded
+ // and validated with nothing anywhere that ever read it — every enrollment
+ // certificate got a hard-coded 1440-minute (24h) TTL regardless of what an
+ // operator configured. Defaults to 1440 so every existing caller/test that
+ // never cared about a custom TTL keeps working unchanged.
+ constructor(private d:DeviceRepository,private n:NodeRepository,private u:UnitOfWork,private attest:AttestationVerifier,private certs:CertificateIssuer,private peers:PeerDistributor,private ids:IdGenerator,private clock:Clock,private certificateTtlMinutes=1440){}
  async register(r:EnrollmentRequest){
   if(!r.wireGuardPublicKey || !r.hardwareId) throw new ValidationError("hardware and public keys are required");
   // A WireGuard (Curve25519) key cannot stand in for the X.509 identity
@@ -27,7 +32,7 @@ export class EnrollmentService {
   // Invisible until TrustCoreIssuer replaced DevelopmentCertificateIssuer,
   // which never persisted anything to notice the ordering was wrong.
   await this.u.transaction(async()=>{await this.d.save(device);await this.n.save(node)});
-  const certificate=await this.certs.issueNodeCertificate(nodeId,r.attestationPublicKey,1440);
+  const certificate=await this.certs.issueNodeCertificate(nodeId,r.attestationPublicKey,this.certificateTtlMinutes);
   const active=(await this.n.list()).filter(x=>x.active&&x.id!==nodeId); await this.peers.configure(node,active);
   return {device,node,certificate,peers:active};
  }
