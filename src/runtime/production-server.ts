@@ -14,7 +14,8 @@ import {JitService} from "../application/jit.js";
 import {SocService} from "../application/soc.js";
 import {ThreatResponseService} from "../application/threat-response.js";
 import {SafeApplyService} from "../application/safe-apply.js";
-import {RandomIds,SystemClock} from "../infrastructure/memory.js";
+import {AuditService} from "../application/audit.js";
+import {RandomIds,SystemClock,Sha256} from "../infrastructure/memory.js";
 import {NoopThreatSink} from "../infrastructure/adapters.js";
 import {PgPolicyEnforcer} from "../infrastructure/pg-policy-enforcer.js";
 import {PgControlPlaneProbe} from "../infrastructure/pg-control-plane-probe.js";
@@ -46,6 +47,13 @@ const db=new Postgres(config.databaseUrl);
 const repo=new PgRepositories(db);
 const bus=new TransactionalOutbox(db);
 const ids=new RandomIds(),clock=new SystemClock();
+// AuditService existed fully built and tested with no caller anywhere, and
+// AuditRepository.chain() (formerly named list(), colliding with
+// NodeRepository/DeviceRepository's own list() on this same repo class —
+// see src/ports/repositories.ts) meant verify() silently walked an empty
+// array and always returned true even before that. Nothing in this
+// process wrote to the tamper-evident audit_chain table at all until now.
+const audit=new AuditService(repo,new Sha256(),clock);
 const jit=new JitService(repo,ids,clock,bus);
 const soc=new SocService(repo,repo,repo,repo,repo,clock);
 
@@ -122,7 +130,7 @@ router.add("GET","/api/v1/nodes",["security-read"],async()=>repo.list());
 
 router.add("GET","/api/v1/policies",["security-read"],async()=>repo.listActive());
 
-router.add("PUT","/api/v1/policies/:id",["security-approver"],async({params,body})=>{
+router.add("PUT","/api/v1/policies/:id",["security-approver"],async({claims,params,body})=>{
   const policy:NetworkPolicy={
     id:params.id!,name:String(body.name??params.id),
     sourceZones:body.sourceZones??[],destinationZones:body.destinationZones??[],
@@ -132,6 +140,7 @@ router.add("PUT","/api/v1/policies/:id",["security-approver"],async({params,body
     version:Number(body.version??1),active:body.active!==false
   };
   await repo.save(policy);
+  await audit.record(claims.sub,"POLICY_UPDATED",policy.id,{name:policy.name,action:policy.action,active:policy.active});
   return policy;
 },{idempotent:true});
 
@@ -140,24 +149,33 @@ router.add("PUT","/api/v1/policies/:id",["security-approver"],async({params,body
 // isn't reachable within the window — see SafeApplyService and
 // PgPolicyEnforcer.stage/rollback. Previously SafeApplyService had no caller
 // anywhere in this file.
-router.add("POST","/api/v1/policies/apply",["security-approver"],async({body})=>{
+router.add("POST","/api/v1/policies/apply",["security-approver"],async({claims,body})=>{
   const policies=await repo.listActive();
   const timeoutMs=Number(body.timeoutMs??config.safeApplyTimeoutMs);
-  return safeApply.apply(policies,timeoutMs);
+  const result=await safeApply.apply(policies,timeoutMs);
+  await audit.record(claims.sub,"POLICY_APPLIED","network-policies",{commitId:result.commitId,status:result.status,policyCount:policies.length});
+  return result;
 },{rateLimit:{limit:5,windowMs:60_000}});
 
 router.add("GET","/api/v1/events",["security-read"],async({query})=>
   repo.recent(Number(query.get("limit")??"100"))
 );
 
+// The tamper-evident hash chain every privileged route above now writes to
+// (audit.record) — previously nothing ever wrote to it, and verify() was
+// silently broken besides (see AuditRepository.chain()'s comment).
+router.add("GET","/api/v1/audit",["security-read"],async()=>repo.chain());
+router.add("GET","/api/v1/audit/verify",["security-read"],async()=>({valid:await audit.verify()}));
+
 router.add("GET","/api/v1/soc/snapshot",["security-read"],async()=>soc.snapshot());
 
 router.add("GET","/api/v1/soc/snapshot/full",["security-read"],async()=>socBackend.snapshot());
 
-router.add("POST","/api/v1/soc/emergency-lockdown",["security-owner"],async({claims,body})=>
-  socBackend.emergencyLockdown(String(body.reason??""),claims.sub,String(body.confirmation??"")),
-  {rateLimit:{limit:2,windowMs:60_000},replayProtected:true}
-);
+router.add("POST","/api/v1/soc/emergency-lockdown",["security-owner"],async({claims,body})=>{
+  const result=await socBackend.emergencyLockdown(String(body.reason??""),claims.sub,String(body.confirmation??""));
+  await audit.record(claims.sub,"EMERGENCY_LOCKDOWN","ecosystem",{reason:String(body.reason??"")});
+  return result;
+},{rateLimit:{limit:2,windowMs:60_000},replayProtected:true});
 
 // Out-of-band recovery — see docs/INCIDENT-RESPONSE-RUNBOOK.md's "Lost
 // controller" procedure. checkpoint pushes a document to the separate OOB
@@ -168,12 +186,16 @@ router.add("POST","/api/v1/soc/emergency-lockdown",["security-owner"],async({cla
 // same as emergency lockdown.
 router.add("POST","/api/v1/oob/checkpoint",["security-approver"],async({claims,body})=>{
   if(!body.scope||body.document===undefined)throw new HttpError(400,"scope and document are required","invalid_request");
-  return oobController.checkpoint(String(body.scope),body.document,claims.sub);
+  const snapshot=await oobController.checkpoint(String(body.scope),body.document,claims.sub);
+  await audit.record(claims.sub,"OOB_CHECKPOINT",String(body.scope),{snapshotId:snapshot.id,checksum:snapshot.checksum});
+  return snapshot;
 });
 
-router.add("POST","/api/v1/oob/rollback",["security-owner"],async({body})=>{
+router.add("POST","/api/v1/oob/rollback",["security-owner"],async({claims,body})=>{
   if(!body.scope)throw new HttpError(400,"scope is required","invalid_request");
-  return oobController.rollback(String(body.scope));
+  const result=await oobController.rollback(String(body.scope));
+  await audit.record(claims.sub,"OOB_ROLLBACK",String(body.scope),result);
+  return result;
 },{rateLimit:{limit:2,windowMs:60_000}});
 
 // Real X.509 CRL distribution point. Public by design: relying parties
@@ -199,26 +221,35 @@ router.add("POST","/api/v1/jit",["security-user"],async({claims,body})=>
   {idempotent:true,rateLimit:{limit:20,windowMs:60_000}}
 );
 
-router.add("POST","/api/v1/jit/:id/approve",["security-approver"],async({claims,params})=>
-  jit.approve(params.id!,claims.sub,claims.roles)
-);
+router.add("POST","/api/v1/jit/:id/approve",["security-approver"],async({claims,params})=>{
+  const result=await jit.approve(params.id!,claims.sub,claims.roles);
+  await audit.record(claims.sub,"JIT_APPROVED",params.id!,{});
+  return result;
+});
 
-router.add("POST","/api/v1/jit/:id/terminate",["security-approver"],async({params,body})=>
-  jit.terminate(params.id!,String(body.reason??"terminated by security operator"))
-);
+router.add("POST","/api/v1/jit/:id/terminate",["security-approver"],async({claims,params,body})=>{
+  const reason=String(body.reason??"terminated by security operator");
+  const result=await jit.terminate(params.id!,reason);
+  await audit.record(claims.sub,"JIT_TERMINATED",params.id!,{reason});
+  return result;
+});
 
-router.add("POST","/api/v1/nodes/:id/quarantine",["security-approver"],async({params,body})=>
-  threatResponse.handle({
+router.add("POST","/api/v1/nodes/:id/quarantine",["security-approver"],async({claims,params,body})=>{
+  const reason=String(body.reason??"manual SOC quarantine");
+  const result=await threatResponse.handle({
     id:ids.next(),nodeId:params.id!,at:clock.now(),
     severity:"CRITICAL",engine:"soc-manual",type:"MANUAL_QUARANTINE",
-    description:String(body.reason??"manual SOC quarantine"),metadata:{score:90}
-  }),
-  {rateLimit:{limit:10,windowMs:60_000}}
-);
+    description:reason,metadata:{score:90}
+  });
+  await audit.record(claims.sub,"NODE_QUARANTINED",params.id!,{reason});
+  return result;
+},{rateLimit:{limit:10,windowMs:60_000}});
 
-router.add("POST","/api/v1/nodes/:id/restore",["security-approver"],async({params,body})=>
-  threatResponse.restore(params.id!,String(body.clearanceToken??""))
-);
+router.add("POST","/api/v1/nodes/:id/restore",["security-approver"],async({claims,params,body})=>{
+  const result=await threatResponse.restore(params.id!,String(body.clearanceToken??""));
+  await audit.record(claims.sub,"NODE_RESTORED",params.id!,{});
+  return result;
+});
 
 router.add("POST","/api/v1/agent/heartbeat",["security-agent"],async({body})=>{
   const accepted=await heartbeats.accept({
@@ -261,23 +292,25 @@ router.add("POST","/api/v1/access/decide",["security-agent"],async({body})=>{
 // Real AWS EC2 relay auto-provisioning — see services/relay-fleet/. Returns
 // a clear 501 "coming soon" instead of crashing when no AWS account/AMI is
 // configured yet; the existing manually-inserted-relay path is unaffected.
-router.add("POST","/api/v1/relays/provision",["security-owner"],async({body})=>{
+router.add("POST","/api/v1/relays/provision",["security-owner"],async({claims,body})=>{
   if(!relayFleet)throw new HttpError(501,"AWS relay auto-provisioning is not configured yet — set AWS_RELAY_AMI_ID and AWS_RELAY_REGION (coming soon)","not_configured");
   const region=String(body.region??relayFleet.region);
   const instanceType=String(body.instanceType??"t3.small");
   const instance=await relayFleet.provisioner.launch({region,instanceType});
   const relayId=randomUUID();
   await relayStore.insert(relayId,region,instance.endpoint,instance.instanceId);
+  await audit.record(claims.sub,"RELAY_PROVISIONED",relayId,{region,instanceType,instanceId:instance.instanceId});
   return {relayId,...instance};
 },{rateLimit:{limit:5,windowMs:60_000}});
 
-router.add("POST","/api/v1/relays/:id/terminate",["security-owner"],async({params})=>{
+router.add("POST","/api/v1/relays/:id/terminate",["security-owner"],async({claims,params})=>{
   if(!relayFleet)throw new HttpError(501,"AWS relay auto-provisioning is not configured yet — set AWS_RELAY_AMI_ID and AWS_RELAY_REGION (coming soon)","not_configured");
   const relay=await relayStore.get(params.id!);
   if(!relay)throw new HttpError(404,"relay not found","not_found");
   if(!relay.instanceId)throw new HttpError(400,"this relay has no associated AWS instance to terminate — it was added manually","invalid_request");
   await relayFleet.provisioner.terminate(relay.instanceId);
   await relayStore.remove(relay.relayId);
+  await audit.record(claims.sub,"RELAY_TERMINATED",params.id!,{instanceId:relay.instanceId});
   return {terminated:true};
 },{rateLimit:{limit:5,windowMs:60_000}});
 

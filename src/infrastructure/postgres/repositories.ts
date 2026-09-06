@@ -92,7 +92,13 @@ export class PgRepositories implements DeviceRepository,NodeRepository,
     const r=await this.q(`SELECT * FROM bapc_security_core.audit_chain
       ORDER BY sequence DESC LIMIT 1`);
     if(!r.rowCount)return undefined;
-    const x:any=r.rows[0];
+    return this.auditRecord(r.rows[0]);
+  }
+  async chain():Promise<AuditRecord[]>{
+    const r=await this.q(`SELECT * FROM bapc_security_core.audit_chain ORDER BY sequence ASC`);
+    return r.rows.map((x:any)=>this.auditRecord(x));
+  }
+  private auditRecord(x:any):AuditRecord{
     return {sequence:Number(x.sequence),at:date(x.event_timestamp),actor:x.actor,
       action:x.action,subject:x.subject,payload:x.payload,
       previousHash:x.previous_hash,hash:x.event_hash};

@@ -4,5 +4,12 @@ export interface NodeRepository { get(id:UUID):Promise<MeshNode|undefined>; find
 export interface PolicyRepository { get(id:UUID):Promise<NetworkPolicy|undefined>; save(value:NetworkPolicy):Promise<void>; listActive():Promise<NetworkPolicy[]>; }
 export interface JitRepository { get(id:UUID):Promise<JitGrant|undefined>; save(value:JitGrant):Promise<void>; listActive(now:Date):Promise<JitGrant[]>; }
 export interface EventRepository { append(value:SecurityEvent):Promise<void>; recent(limit:number):Promise<SecurityEvent[]>; }
-export interface AuditRepository { append(value:AuditRecord):Promise<void>; last():Promise<AuditRecord|undefined>; list():Promise<AuditRecord[]>; }
+// chain() — not list() — deliberately: this class also implements
+// DeviceRepository/NodeRepository, both of which already declare a
+// same-named list() with a different return type. A single class can only
+// have one `list` method, so the two silently collided (TypeScript's `any`
+// return type on the shared implementation hid it) — AuditService.verify()
+// was calling what was actually NodeRepository.list(), walking an empty or
+// wrong array and always returning true. See PgRepositories/MemoryStore.
+export interface AuditRepository { append(value:AuditRecord):Promise<void>; last():Promise<AuditRecord|undefined>; chain():Promise<AuditRecord[]>; }
 export interface UnitOfWork { transaction<T>(work:()=>Promise<T>):Promise<T>; }
