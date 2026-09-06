@@ -48,6 +48,26 @@
   </div>
 
   <div class="card full">
+    <h2>JIT Grants <button class="action" id="newJit" style="float:right">Request Access</button></h2>
+    <table id="jitTable"><thead><tr><th>ID</th><th>User</th><th>Resource</th><th>Zone</th><th>Expires</th><th>Actions</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card full">
+    <h2>Network Policies</h2>
+    <table id="policiesTable"><thead><tr><th>ID</th><th>Name</th><th>Action</th><th>Priority</th><th>Active</th><th>Actions</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Certificates (nearest expiry)</h2>
+    <table id="certsTable"><thead><tr><th>Serial</th><th>Subject</th><th>Expires</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Relays</h2>
+    <table id="relaysTable"><thead><tr><th>Region</th><th>Endpoint</th><th>Load%</th><th>Up</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card full">
     <h2>Recent Security Events</h2>
     <table id="eventsTable"><thead><tr><th>Time</th><th>Severity</th><th>Engine</th><th>Type</th><th>Description</th></tr></thead><tbody></tbody></table>
   </div>
@@ -81,16 +101,81 @@ function actionButton(label, onClick) {
   return btn;
 }
 
+function setStatus(message, isError) {
+  const el = document.getElementById("status");
+  el.textContent = message;
+  el.className = isError ? "err" : "";
+}
+
 async function refresh() {
-  document.getElementById("status").textContent = "";
+  setStatus("", false);
   try {
-    const snapshot = await api("/api/v1/soc/snapshot");
+    const [snapshot, full] = await Promise.all([
+      api("/api/v1/soc/snapshot"),
+      api("/api/v1/soc/snapshot/full")
+    ]);
     document.getElementById("statDevices").textContent = snapshot.counts.devices;
     document.getElementById("statNodes").textContent = snapshot.counts.activeNodes;
     document.getElementById("statJit").textContent = snapshot.counts.activeJit;
     document.getElementById("statPolicies").textContent = snapshot.counts.activePolicies;
     document.getElementById("statCompromised").textContent = snapshot.counts.compromisedDevices;
     document.getElementById("statCritical").textContent = snapshot.counts.criticalEvents;
+
+    const jitBody = document.querySelector("#jitTable tbody");
+    jitBody.innerHTML = "";
+    for (const g of full.jit) {
+      const actions = document.createElement("span");
+      actions.style.display = "flex"; actions.style.gap = "6px";
+      actions.appendChild(actionButton("Approve", async () => {
+        try { await api(`/api/v1/jit/${g.grant_id}/approve`, { method: "POST" }); refresh(); }
+        catch (err) { setStatus(err.message, true); }
+      }));
+      actions.appendChild(actionButton("Terminate", async () => {
+        const reason = prompt("Termination reason:", "terminated by SOC operator");
+        if (reason === null) return;
+        try { await api(`/api/v1/jit/${g.grant_id}/terminate`, { method: "POST", body: JSON.stringify({ reason }) }); refresh(); }
+        catch (err) { setStatus(err.message, true); }
+      }));
+      jitBody.appendChild(row([
+        g.grant_id.slice(0, 8), g.user_id.slice(0, 8), g.target_resource, g.target_zone,
+        new Date(g.expires_at).toLocaleString(), actions
+      ]));
+    }
+
+    const policiesBody = document.querySelector("#policiesTable tbody");
+    policiesBody.innerHTML = "";
+    for (const p of full.policies) {
+      const editBtn = actionButton("Edit JSON", async () => {
+        const current = JSON.stringify(p, null, 2);
+        const edited = prompt("Edit policy JSON, then submit (PUT /api/v1/policies/:id):", current);
+        if (!edited) return;
+        try {
+          const body = JSON.parse(edited);
+          await api(`/api/v1/policies/${p.policy_id}`, { method: "PUT", body: JSON.stringify(body) });
+          refresh();
+        } catch (err) { setStatus(err.message, true); }
+      });
+      policiesBody.appendChild(row([
+        p.policy_id.slice(0, 8), p.name, p.action || "-", p.priority, p.is_active ? "yes" : "no", editBtn
+      ]));
+    }
+
+    const certsBody = document.querySelector("#certsTable tbody");
+    certsBody.innerHTML = "";
+    for (const c of full.certificates.slice(0, 20)) {
+      const expires = new Date(c.expires_at);
+      const soon = (expires - Date.now()) < 30 * 86400000;
+      const cell = document.createElement("span");
+      if (soon) cell.className = "sev-WARN";
+      cell.textContent = expires.toLocaleDateString();
+      certsBody.appendChild(row([c.serial_number, c.subject_dn, cell]));
+    }
+
+    const relaysBody = document.querySelector("#relaysTable tbody");
+    relaysBody.innerHTML = "";
+    for (const r of full.relays) {
+      relaysBody.appendChild(row([r.region, r.endpoint, r.load_percent, r.is_available ? "yes" : "no"]));
+    }
 
     const nodesBody = document.querySelector("#nodesTable tbody");
     nodesBody.innerHTML = "";
@@ -103,7 +188,7 @@ async function refresh() {
         try {
           await api(`/api/v1/nodes/${n.id}/quarantine`, { method: "POST", body: JSON.stringify({ reason }) });
           refresh();
-        } catch (err) { document.getElementById("status").textContent = err.message; }
+        } catch (err) { setStatus(err.message, true); }
       }));
       actions.appendChild(actionButton("Restore", async () => {
         const clearanceToken = prompt("Signed Diagnostics clearance token (diag-clearance:...):");
@@ -111,7 +196,7 @@ async function refresh() {
         try {
           await api(`/api/v1/nodes/${n.id}/restore`, { method: "POST", body: JSON.stringify({ clearanceToken }) });
           refresh();
-        } catch (err) { document.getElementById("status").textContent = err.message; }
+        } catch (err) { setStatus(err.message, true); }
       }));
       nodesBody.appendChild(row([n.id.slice(0, 8), n.zone, n.nodeType, n.active ? "yes" : "no", actions]));
     }
@@ -124,7 +209,7 @@ async function refresh() {
       eventsBody.appendChild(row([new Date(e.at).toLocaleString(), sev, e.engine, e.type, e.description]));
     }
   } catch (err) {
-    document.getElementById("status").textContent = err.message;
+    setStatus(err.message, true);
   }
 }
 
@@ -141,16 +226,29 @@ document.getElementById("lockdown").onclick = async () => {
   const reason = prompt("Detailed emergency reason (min 20 characters):");
   if (!reason) return;
   const confirmation = prompt('Type LOCKDOWN to confirm:');
-  if (confirmation !== "LOCKDOWN") { document.getElementById("status").textContent = "Lockdown cancelled: confirmation text did not match."; return; }
+  if (confirmation !== "LOCKDOWN") { setStatus("Lockdown cancelled: confirmation text did not match.", true); return; }
   try {
     const result = await api("/api/v1/soc/emergency-lockdown", { method: "POST", body: JSON.stringify({ reason, confirmation }) });
-    document.getElementById("status").textContent = `Lockdown executed (scope: ${result.scope}).`;
-    document.getElementById("status").className = "";
+    setStatus(`Lockdown executed (scope: ${result.scope}).`, false);
     refresh();
   } catch (err) {
-    document.getElementById("status").textContent = err.message;
-    document.getElementById("status").className = "err";
+    setStatus(err.message, true);
   }
+};
+
+document.getElementById("newJit").onclick = async () => {
+  const targetResource = prompt("Target resource (e.g. a hostname or service name):");
+  if (!targetResource) return;
+  const targetZone = prompt("Target zone (e.g. ZONE_PROD_DATA, ZONE_PROD_APP, ZONE_STAGING, ZONE_DEV, ZONE_ADMIN_MGMT):");
+  if (!targetZone) return;
+  const durationMinutes = Number(prompt("Duration in minutes (15, 30 or 60):", "15"));
+  const justification = prompt("Justification (min 12 characters):");
+  if (!justification) return;
+  try {
+    await api("/api/v1/jit", { method: "POST", body: JSON.stringify({ targetResource, targetZone, durationMinutes, justification }) });
+    setStatus("JIT request submitted.", false);
+    refresh();
+  } catch (err) { setStatus(err.message, true); }
 };
 </script>
 </body>
