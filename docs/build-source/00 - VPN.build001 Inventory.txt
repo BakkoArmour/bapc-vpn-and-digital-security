@@ -1,0 +1,29 @@
+BAPC VPN & Digital Security™
+VPN.build001 — Build Document Inventory
+
+MASTER SPECIFICATIONS
+1. sec.01.docx
+2. sec.2.docx
+3. sec.3.docx
+
+ORIGINAL CODE SECTIONS
+4. sec.code.01.docx
+5. sec.code.02.docx
+6. sec.code.03.docx
+7. sec.code.04.docx
+8. sec.code.05.docx
+
+CONSOLIDATED CODE PACKETS
+9. BAPC.Security.Full.Code.Packet.01.docx
+10. BAPC.Security.Full.Code.Packet.02.docx
+
+PRODUCTION COMPLETION / ADDENDA
+11. BAPC.Security.Production.Completion.Addendum.docx
+12. Code Addendum.docx
+13. BAPC VPN Security - Final Production Addendum.docx
+14. BAPC VPN Security - Final Production Addendum + Visual Addendum.docx
+
+Notes:
+- The corrected Visual Addendum is text-only; no generated image is included.
+- The superseded intermediate visual document was intentionally excluded.
+- The package preserves both the original sectioned code documents and the later consolidated code packets for reconstruction/reference.

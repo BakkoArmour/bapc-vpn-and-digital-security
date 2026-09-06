@@ -1,0 +1,22 @@
+export interface PlatformAdapter {
+  platform:"linux"|"windows"|"macos"|"ios"|"ipados";
+  applyWireGuard(input:{
+    privateKeyReference:string;addresses:string[];listenPort?:number;
+    peers:Array<{publicKey:string;endpoint?:string;allowedIps:string[];keepaliveSeconds:number}>;
+  }):Promise<void>;
+  applyFirewall(input:{
+    commitId:string;defaultAction:"DENY";rules:Array<{
+      id:string;action:"ALLOW"|"DENY";protocols:string[];ports:number[];
+      sourceZones:string[];destinationZones:string[];
+    }>;
+  }):Promise<void>;
+  rollbackFirewall(commitId:string):Promise<void>;
+  setKillSwitch(enabled:boolean):Promise<void>;
+  setDns(servers:string[]):Promise<void>;
+  isolate(reason:string):Promise<void>;
+  restore():Promise<void>;
+  collectPosture():Promise<{
+    osCurrent:boolean;diskEncrypted:boolean;secureBoot:boolean;
+    firewallEnabled:boolean;agentHealthy:boolean;bannedProcessFound:boolean;
+  }>;
+}

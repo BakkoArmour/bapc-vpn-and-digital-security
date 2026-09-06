@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: bapc-security-control, namespace: bapc-security}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: bapc-security-control}}
+  template:
+    metadata: {labels: {app: bapc-security-control}}
+    spec:
+      serviceAccountName: bapc-security-control
+      containers:
+        - name: control
+          image: registry.bapc.internal/security/control:0.2.0
+          ports: [{containerPort: 8080}]
+          envFrom: [{secretRef: {name: bapc-security-control}}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 3, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 20}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: {drop: ["ALL"]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: bapc-security-control, namespace: bapc-security}
+spec: {selector: {app: bapc-security-control}, ports: [{port: 8080, targetPort: 8080}]}

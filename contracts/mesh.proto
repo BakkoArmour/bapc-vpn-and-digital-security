@@ -1,0 +1,10 @@
+syntax = "proto3";
+package bapc.security.v1;
+service MeshOrchestrationService { rpc RegisterNode(NodeRegistrationRequest) returns (NodeRegistrationResponse); rpc StreamHeartbeat(stream NodeHeartbeat) returns (stream ControllerCommand); rpc RotatePeerKey(KeyRotationRequest) returns (KeyRotationResponse); }
+message NodeRegistrationRequest { string hardware_uuid=1; string wireguard_public_key=2; bytes hardware_attestation_quote=3; string os_signature=4; }
+message NodeRegistrationResponse { string internal_ipv4=1; string internal_ipv6=2; repeated PeerConfig initial_peers=3; bytes signed_client_certificate=4; string assigned_zone=5; }
+message PeerConfig { string public_key=1; string endpoint=2; repeated string allowed_ips=3; int32 keepalive_interval=4; }
+message NodeHeartbeat { string node_id=1; int64 timestamp=2; bytes posture_hash=3; int64 bytes_transmitted=4; int64 bytes_received=5; }
+message ControllerCommand { enum Action { NOOP=0; RELOAD_POLICIES=1; ROTATE_KEYS=2; QUARANTINE_NODE=3; SEVER_ALL=4; } Action action=1; bytes payload=2; }
+message KeyRotationRequest { string node_id=1; string new_public_key=2; bytes signature=3; }
+message KeyRotationResponse { bool acknowledged=1; int64 effective_epoch=2; }

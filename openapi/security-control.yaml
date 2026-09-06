@@ -1,0 +1,56 @@
+openapi: 3.1.0
+info:
+  title: BAPC VPN & Digital Security Control API
+  version: 0.3.0
+servers:
+  - url: https://security-control.internal
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      security: []
+      responses:
+        "200": {description: Healthy}
+  /api/v1/status:
+    get:
+      responses:
+        "200": {description: Control-plane status}
+  /api/v1/nodes:
+    get:
+      responses:
+        "200": {description: Active mesh nodes}
+  /api/v1/jit:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetResource,targetZone,durationMinutes,justification]
+              properties:
+                targetResource: {type: string, minLength: 1}
+                targetZone: {type: string}
+                durationMinutes: {enum: [15,30,60]}
+                justification: {type: string, minLength: 12}
+      responses:
+        "200": {description: JIT request created}
+  /api/v1/jit/{id}/approve:
+    post:
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+      responses:
+        "200": {description: JIT request approved}
+  /api/v1/jit/{id}/terminate:
+    post:
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+      responses:
+        "200": {description: JIT request terminated}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: BAPC-HMAC
