@@ -49,9 +49,11 @@ Set-Content -Path (Join-Path $installDir "$ServiceName.xml") -Value $configXml -
 Push-Location $installDir
 try {
   & ".\$ServiceName.exe" install
-  Start-Service $ServiceName
 } finally {
   Pop-Location
 }
 
-Write-Output "Installed and started service '$ServiceName'. Check status with: Get-Service $ServiceName"
+Write-Output "Installed but not started: run 'npm run enroll -- --out-dir `"$installDir`"' from $RepoRoot first"
+Write-Output "(generates this node's keys, registers with the control plane, and brings the interface up),"
+Write-Output "then add <env name=`"BAPC_NODE_ID`" .../>, BAPC_CONTROLLER_URL and BAPC_AGENT_TOKEN to"
+Write-Output "$installDir\$ServiceName.xml before running: Start-Service $ServiceName"

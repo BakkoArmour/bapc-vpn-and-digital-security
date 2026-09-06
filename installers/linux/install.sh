@@ -29,9 +29,15 @@ chmod 750 "${STATE_DIR}"
 if [[ ! -f "${CONFIG_DIR}/agent.env" ]]; then
   cat > "${CONFIG_DIR}/agent.env" <<'EOF'
 # BAPC endpoint agent configuration. See docs/PRODUCTION-ADAPTERS.md.
+# Run `npm run enroll` (as root, from this repo) before starting the
+# service — it generates this node's WireGuard/identity keys, registers
+# with the control plane, brings the interface up, and writes BAPC_NODE_ID
+# below automatically.
 NODE_ENV=production
-# CONTROLLER_URL=https://security-control.internal
-# AGENT_VERSION=0.4.0
+# BAPC_CONTROLLER_URL=https://security-control.internal
+# BAPC_CONTROLLER_GRPC_URL=security-control.internal:50051
+# BAPC_AGENT_VERSION=0.4.0
+# BAPC_AGENT_TOKEN=... (issued out of band — enrollment does not mint this)
 EOF
   chmod 640 "${CONFIG_DIR}/agent.env"
   chown root:bapc-security "${CONFIG_DIR}/agent.env"
@@ -39,6 +45,7 @@ fi
 
 cp "$(dirname "${BASH_SOURCE[0]}")/bapc-security-agent.service" "${UNIT_PATH}"
 systemctl daemon-reload
-systemctl enable --now bapc-security-agent.service
 
-echo "Installed. Check status with: systemctl status bapc-security-agent" >&2
+echo "Installed. Before starting the service: run 'npm run enroll' from ${SOURCE_DIR} as root," >&2
+echo "then set BAPC_CONTROLLER_URL and BAPC_AGENT_TOKEN in ${CONFIG_DIR}/agent.env." >&2
+echo "Then: systemctl enable --now bapc-security-agent" >&2

@@ -134,7 +134,8 @@ export const buildMeshGrpcServer=(deps:GrpcMeshDeps):grpc.Server=>{
             keepaliveInterval:25
           })),
           signedClientCertificate:Buffer.from(result.certificate.certificatePem,"utf8"),
-          assignedZone:result.node.zone
+          assignedZone:result.node.zone,
+          nodeId:result.node.id
         });
       }catch(error){
         callback({code:grpc.status.INVALID_ARGUMENT,message:error instanceof Error?error.message:"registration failed"});

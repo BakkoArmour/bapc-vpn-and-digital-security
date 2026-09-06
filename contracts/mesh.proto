@@ -9,7 +9,12 @@ service MeshOrchestrationService { rpc RegisterNode(NodeRegistrationRequest) ret
 // key (this control plane's CA issues RSA-signed certificates). Required:
 // without it there is no compatible key to certify.
 message NodeRegistrationRequest { string hardware_uuid=1; string wireguard_public_key=2; bytes hardware_attestation_quote=3; string os_signature=4; bytes csr_der=5; }
-message NodeRegistrationResponse { string internal_ipv4=1; string internal_ipv6=2; repeated PeerConfig initial_peers=3; bytes signed_client_certificate=4; string assigned_zone=5; }
+// node_id (6): the enrolled node's own id — needed by the node itself to
+// poll for commands (streamHeartbeat/agent heartbeat) and to sign future
+// RotatePeerKey requests. Added alongside the enrollment bootstrap flow
+// (src/runtime/enroll-node.ts); previously nothing in this response let a
+// newly-enrolled node learn its own id at all.
+message NodeRegistrationResponse { string internal_ipv4=1; string internal_ipv6=2; repeated PeerConfig initial_peers=3; bytes signed_client_certificate=4; string assigned_zone=5; string node_id=6; }
 message PeerConfig { string public_key=1; string endpoint=2; repeated string allowed_ips=3; int32 keepalive_interval=4; }
 message NodeHeartbeat { string node_id=1; int64 timestamp=2; bytes posture_hash=3; int64 bytes_transmitted=4; int64 bytes_received=5; }
 message ControllerCommand { enum Action { NOOP=0; RELOAD_POLICIES=1; ROTATE_KEYS=2; QUARANTINE_NODE=3; SEVER_ALL=4; } Action action=1; bytes payload=2; }

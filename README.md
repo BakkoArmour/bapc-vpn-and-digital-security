@@ -73,10 +73,20 @@ This is a strict-TypeScript control plane with:
   blind relay, and a real minimal SOCKS5 egress proxy. Both adapters also
   implement route-integrity monitoring/restoration (`AgentReconciler`,
   feature catalog #56-60) — wired into the endpoint agent via a `RECONCILE`
-  controller command. `POST /api/v1/relays/provision` boots real relay fleet
-  nodes on AWS EC2 (`services/relay-fleet/`) from a pre-baked golden AMI
+  controller command, and peer-topology changes (a rotated or newly-joined
+  peer) reach already-connected nodes via `APPLY_PEERS` — never touching a
+  node's own WireGuard private key, which correctly never reaches this
+  server. `POST /api/v1/relays/provision` boots real relay fleet nodes on
+  AWS EC2 (`services/relay-fleet/`) from a pre-baked golden AMI
   (`docs/RELAY-FLEET-AMI.md`) when `AWS_RELAY_AMI_ID`/`AWS_RELAY_REGION` are
   set — real, wired code, not a stub — returning a clear 501 otherwise.
+- **Enrollment**: `npm run enroll` (installers run this before starting the
+  endpoint-agent service — see `installers/`) generates a node's WireGuard
+  and identity keypairs locally, registers over the real gRPC service to get
+  a certificate/node id/initial peer list, and brings the interface up via
+  the same `PlatformAdapter` the agent uses — previously nothing in this
+  repository performed that flow, so a node could never actually join the
+  mesh on its own.
 - **Secure DNS**: a real UDP DNS server with threat-feed/DGA sinkholing and
   a DNS-over-HTTPS upstream client.
 - **Recovery & intelligence**: an out-of-band recovery channel on its own
