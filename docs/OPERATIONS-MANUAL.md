@@ -26,6 +26,16 @@ Each reads its configuration from environment variables — see `.env.example`
 for the full list and `src/config.ts` for the REST API's validation rules
 (production refuses default development secrets).
 
+**Minting a bearer token.** `npm run token -- --roles security-read,security-approver`
+(role names: `security-read`, `security-approver`, `security-owner`,
+`security-agent` — see each route's required-roles array in
+`production-server.ts`) reads `CONTROL_API_TOKEN_SECRET` from the
+environment and prints a token `HmacBearerGuard` accepts
+(`scripts/mint-token.mjs`, backed by `HmacBearerGuard.mint`). Pass
+`--sub <uuid>` for a stable identity (random otherwise), `--ttl <seconds>`
+(default 3600), or `--secret <value>` to override the env var. Requires
+`npm run build` first.
+
 **Bearer token `sub` must be a UUID.** `jit_grants.user_id` (and other
 identity-keyed columns) are `uuid NOT NULL` — a bearer token whose `sub`
 claim isn't a valid UUID fails with a raw-looking Postgres error

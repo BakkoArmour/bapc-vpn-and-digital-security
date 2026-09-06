@@ -5,6 +5,19 @@ import {HttpError} from "./errors.js";
 export interface ApiClaims {sub:string;roles:string[];exp:number;iat?:number;jti?:string;}
 export class HmacBearerGuard {
   constructor(private secret:string){}
+
+  // The signing counterpart to verify() below — previously this repository
+  // had no way to actually produce a token this guard accepts (verify()
+  // documents the wire format, but nothing implemented it), leaving "mint a
+  // bearer token" as an operation the docs referred to without anywhere to
+  // do it. See scripts/mint-token.mjs for the operator-facing CLI.
+  static mint(claims:Omit<ApiClaims,"exp">&{exp?:number},secret:string):string{
+    const full:ApiClaims={...claims,exp:claims.exp??Math.floor(Date.now()/1000)+3600};
+    const encoded=Buffer.from(JSON.stringify(full)).toString("base64url");
+    const signature=createHmac("sha256",secret).update(encoded).digest("base64url");
+    return `${encoded}.${signature}`;
+  }
+
   verify(request:IncomingMessage,requiredRoles:string[]=[]):ApiClaims{
     const auth=request.headers.authorization;
     if(!auth?.startsWith("Bearer "))throw new HttpError(401,"missing bearer token","unauthorized");
