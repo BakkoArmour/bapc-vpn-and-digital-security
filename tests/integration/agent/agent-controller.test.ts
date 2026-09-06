@@ -55,9 +55,15 @@ test("RestAgentController.acknowledge posts the result back",async()=>{
 
 test("PgCommandQueue issues the expected enqueue/pending/acknowledge SQL",async()=>{
   const queries:Array<{text:string;values:unknown[]}>=[];
-  const rowsToReturn:any[]=[{command_id:"cmd-1",command_type:"SET_DNS",payload:{servers:["1.1.1.1"]}}];
+  const pendingRows:any[]=[{command_id:"cmd-1",command_type:"SET_DNS",payload:{servers:["1.1.1.1"]}}];
+  const updateReturnRows:any[]=[{node_id:"n1",command_type:"SET_DNS",issued_at:"2026-01-01T00:00:00.000Z"}];
   const queue=new PgCommandQueue({
-    query:async(text,values=[])=>{queries.push({text,values});return {rows:text.startsWith("SELECT")?rowsToReturn:[]};}
+    query:async(text,values=[])=>{
+      queries.push({text,values});
+      if(text.startsWith("SELECT"))return {rows:pendingRows};
+      if(text.includes("RETURNING"))return {rows:updateReturnRows};
+      return {rows:[]};
+    }
   });
   await queue.enqueue("n1","SET_DNS",{servers:["1.1.1.1"]});
   const pending=await queue.pending("n1");
@@ -67,4 +73,35 @@ test("PgCommandQueue issues the expected enqueue/pending/acknowledge SQL",async(
   assert.match(queries[1]!.text,/SELECT command_id,command_type,payload/);
   assert.match(queries[2]!.text,/UPDATE bapc_security_core\.controller_commands/);
   assert.deepEqual(pending,[{id:"cmd-1",type:"SET_DNS",payload:{servers:["1.1.1.1"]}}]);
+
+  // command_acknowledgements existed with no write path at all —
+  // controller_commands only ever gets updated in place, so this is the
+  // one permanent record of an acknowledgement that survives even if that
+  // row is later pruned.
+  assert.match(queries[3]!.text,/INSERT INTO bapc_security_core\.command_acknowledgements/);
+  assert.deepEqual(queries[3]!.values,["cmd-1","n1","SET_DNS","2026-01-01T00:00:00.000Z","SUCCEEDED",{ok:true}]);
+});
+
+test("PgCommandQueue.acknowledge derives FAILED/ACKNOWLEDGED status from the result shape",async()=>{
+  const queries:Array<{text:string;values:unknown[]}>=[];
+  const updateReturnRows:any[]=[{node_id:"n1",command_type:"QUARANTINE",issued_at:"2026-01-01T00:00:00.000Z"}];
+  const queue=new PgCommandQueue({
+    query:async(text,values=[])=>{
+      queries.push({text,values});
+      return {rows:text.includes("RETURNING")?updateReturnRows:[]};
+    }
+  });
+  await queue.acknowledge("cmd-2",{ok:false,error:"boom"});
+  assert.equal(queries[1]!.values[4],"FAILED");
+
+  queries.length=0;
+  await queue.acknowledge("cmd-3",{deliveredAt:"now",via:"grpc-stream-heartbeat"});
+  assert.equal(queries[1]!.values[4],"ACKNOWLEDGED");
+});
+
+test("PgCommandQueue.acknowledge is a no-op if the command id doesn't exist",async()=>{
+  const queries:Array<{text:string;values:unknown[]}>=[];
+  const queue=new PgCommandQueue({query:async(text,values=[])=>{queries.push({text,values});return {rows:[]};}});
+  await queue.acknowledge("missing",{ok:true});
+  assert.equal(queries.length,1); // only the UPDATE ran; no INSERT for a row that was never found
 });

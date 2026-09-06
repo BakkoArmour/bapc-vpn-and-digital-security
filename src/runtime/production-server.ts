@@ -69,7 +69,7 @@ const soc=new SocService(repo,repo,repo,repo,repo,clock);
 // so a quarantine actually reaches the node. stage/rollback broadcast a real
 // APPLY_FIREWALL/ROLLBACK_FIREWALL command to every active node the same way.
 const commandQueue=new PgCommandQueue(db);
-const enforcer=new PgPolicyEnforcer(commandQueue,repo);
+const enforcer=new PgPolicyEnforcer(commandQueue,repo,db);
 // SafeApplyService (src/application/safe-apply.ts) existed with no caller
 // anywhere in production — a staged policy set had nowhere to be applied
 // from and nothing to auto-rollback against. PgControlPlaneProbe checks the
@@ -188,7 +188,7 @@ router.add("POST","/api/v1/policies/apply",["security-approver"],async({claims,b
   }
   const policies=await repo.listActive();
   const timeoutMs=Number(body.timeoutMs??config.safeApplyTimeoutMs);
-  const result=await safeApply.apply(policies,timeoutMs);
+  const result=await safeApply.apply(policies,timeoutMs,claims.sub);
   await audit.record(claims.sub,"POLICY_APPLIED","network-policies",{commitId:result.commitId,status:result.status,policyCount:policies.length});
   return result;
 },{rateLimit:{limit:5,windowMs:60_000}});

@@ -4,6 +4,14 @@ import type {NodeRepository} from "../ports/repositories.js";
 import type {PgCommandQueue} from "../../services/mesh-controller/pg-command-queue.js";
 import {PolicyCompiler} from "../application/policy-compiler.js";
 
+export interface PgQueryable {query(text:string,values?:unknown[]):Promise<{rows:any[]}>;}
+
+// A well-known nil UUID, not a real identity — used only when stage() is
+// called with no initiatedBy (policy_commits.initiated_by is NOT NULL, and
+// PolicyEnforcer.stage's initiatedBy parameter is optional for compatibility
+// with other implementers/tests that don't track one).
+const SYSTEM_INITIATOR="00000000-0000-0000-0000-000000000000";
+
 const firewallRulesFor=(policies:NetworkPolicy[])=>policies.map(p=>({
   id:p.id,
   // ISOLATE-action policies aren't a firewall verb; SafeApplyService/this
@@ -17,15 +25,23 @@ const firewallRulesFor=(policies:NetworkPolicy[])=>policies.map(p=>({
 
 // Replaces InMemoryEnforcer in production.
 //
-// stage/rollback broadcast a real APPLY_FIREWALL/ROLLBACK_FIREWALL command to
-// every currently-active node via the same durable command queue the REST
-// endpoint-agent heartbeat drains and executes against the real
-// PlatformAdapter (agents/shared/production-agent.ts) — previously
-// InMemoryEnforcer just tracked staged policies in a Map with zero effect on
-// any real node, so SafeApplyService's "auto-rollback if this broke
-// connectivity" safety net had nothing to actually roll back. commit needs
-// no further node-facing action: the rules are already live from stage: it
-// just clears the bookkeeping used to decide what a rollback removes.
+// stage/commit/rollback now persist to policy_commits
+// (db/002_operational_tables.sql) — a table that existed with columns for
+// exactly this lifecycle (status STAGED/COMMITTED/ROLLED_BACK,
+// auto_revert_seconds, initiated_by, finalized_at) but no write path at
+// all; the previous version of this class tracked staged policies in a
+// plain in-memory Map whose stored value was never even read back, only
+// ever set and later deleted — pure vestigial bookkeeping with no real
+// persistence, invisible to any operator and lost on every restart.
+//
+// stage/rollback also broadcast a real APPLY_FIREWALL/ROLLBACK_FIREWALL
+// command to every currently-active node via the same durable command
+// queue the REST endpoint-agent heartbeat drains and executes against the
+// real PlatformAdapter (agents/shared/production-agent.ts) — previously
+// InMemoryEnforcer had zero effect on any real node, so SafeApplyService's
+// "auto-rollback if this broke connectivity" safety net had nothing to
+// actually roll back. commit needs no further node-facing action: the
+// rules are already live from stage.
 //
 // isolateNode/restoreNode is the path ThreatResponseService and SOC
 // emergency lockdown actually call to cut a specific node off — this
@@ -33,11 +49,10 @@ const firewallRulesFor=(policies:NetworkPolicy[])=>policies.map(p=>({
 // actually implements (PlatformAdapter.isolate/restore, no secret material
 // involved), not the mesh.proto ControllerCommand.Action names.
 export class PgPolicyEnforcer implements PolicyEnforcer {
-  private staged=new Map<string,NetworkPolicy[]>();
   private compiler=new PolicyCompiler();
-  constructor(private queue:PgCommandQueue,private nodes:NodeRepository){}
+  constructor(private queue:PgCommandQueue,private nodes:NodeRepository,private db:PgQueryable){}
 
-  async stage(commitId:string,policies:NetworkPolicy[]):Promise<void>{
+  async stage(commitId:string,policies:NetworkPolicy[],initiatedBy?:string):Promise<void>{
     // PolicyCompiler existed fully built and tested (invalid zone/port
     // rejection) with no caller anywhere — a policy with a typo'd zone name
     // or an out-of-range port would previously be broadcast to every node's
@@ -47,7 +62,11 @@ export class PgPolicyEnforcer implements PolicyEnforcer {
     // (linux/windows/apple) enforcement-plan methods already assume valid
     // input for.
     this.compiler.compile(policies);
-    this.staged.set(commitId,policies);
+    await this.db.query(
+      `INSERT INTO bapc_security_core.policy_commits(commit_id,policy_payload,status,initiated_by)
+       VALUES($1,$2,'STAGED',$3)`,
+      [commitId,JSON.stringify(policies),initiatedBy??SYSTEM_INITIATOR]
+    );
     const rules=firewallRulesFor(policies);
     for(const node of await this.nodes.list()){
       await this.queue.enqueue(node.id,"APPLY_FIREWALL",{commitId,defaultAction:"DENY",rules});
@@ -55,11 +74,17 @@ export class PgPolicyEnforcer implements PolicyEnforcer {
   }
 
   async commit(commitId:string):Promise<void>{
-    this.staged.delete(commitId);
+    await this.db.query(
+      `UPDATE bapc_security_core.policy_commits SET status='COMMITTED', finalized_at=now() WHERE commit_id=$1`,
+      [commitId]
+    );
   }
 
   async rollback(commitId:string):Promise<void>{
-    this.staged.delete(commitId);
+    await this.db.query(
+      `UPDATE bapc_security_core.policy_commits SET status='ROLLED_BACK', finalized_at=now() WHERE commit_id=$1`,
+      [commitId]
+    );
     for(const node of await this.nodes.list()){
       await this.queue.enqueue(node.id,"ROLLBACK_FIREWALL",{commitId},200);
     }

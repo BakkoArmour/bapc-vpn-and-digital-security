@@ -27,11 +27,30 @@ export class PgCommandQueue {
     return r.rows.map(row=>({id:row.command_id,type:row.command_type,payload:row.payload}));
   }
 
+  // command_acknowledgements (db/002_operational_tables.sql) existed with no
+  // write path at all — controller_commands already tracks
+  // acknowledged_at/result in place, but a row there is only ever updated,
+  // never archived: if controller_commands is ever pruned (expires_at
+  // implies that's the intent — there's no purge job yet, but the column
+  // only makes sense if one eventually exists), every acknowledgement
+  // history would disappear with it. This keeps a permanent record
+  // regardless of what happens to the row it came from.
   async acknowledge(commandId:string,result:unknown){
-    await this.db.query(
+    const r=await this.db.query(
       `UPDATE bapc_security_core.controller_commands
-       SET acknowledged_at=now(), result=$2 WHERE command_id=$1`,
+       SET acknowledged_at=now(), result=$2 WHERE command_id=$1
+       RETURNING node_id, command_type, issued_at`,
       [commandId,result]
+    );
+    const row=r.rows[0];
+    if(!row)return;
+    const ok=(result as {ok?:unknown})?.ok;
+    const status=typeof ok==="boolean"?(ok?"SUCCEEDED":"FAILED"):"ACKNOWLEDGED";
+    await this.db.query(
+      `INSERT INTO bapc_security_core.command_acknowledgements
+         (command_id,node_id,command_type,issued_at,acknowledged_at,status,details)
+       VALUES($1,$2,$3,$4,now(),$5,$6)`,
+      [commandId,row.node_id,row.command_type,row.issued_at,status,result??{}]
     );
   }
 }

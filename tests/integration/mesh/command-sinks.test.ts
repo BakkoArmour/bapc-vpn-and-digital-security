@@ -32,10 +32,14 @@ class FakeCommandQueue {
     this.enqueued.push({nodeId,type,payload,priority});
   }
 }
+class FakeDb {
+  queries:Array<{text:string;values:unknown[]}>=[];
+  async query(text:string,values:unknown[]=[]){this.queries.push({text,values});return {rows:[]};}
+}
 
 test("PgPolicyEnforcer.isolateNode enqueues QUARANTINE, the type ProductionAgent.execute implements",async()=>{
   const queue=new FakeCommandQueue();
-  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodeRepository([]) as any);
+  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodeRepository([]) as any,new FakeDb() as any);
   await enforcer.isolateNode("node-1");
   assert.equal(queue.enqueued.length,1);
   assert.equal(queue.enqueued[0]!.nodeId,"node-1");
@@ -44,21 +48,24 @@ test("PgPolicyEnforcer.isolateNode enqueues QUARANTINE, the type ProductionAgent
 
 test("PgPolicyEnforcer.restoreNode enqueues RESTORE, the type ProductionAgent.execute implements",async()=>{
   const queue=new FakeCommandQueue();
-  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodeRepository([]) as any);
+  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodeRepository([]) as any,new FakeDb() as any);
   await enforcer.restoreNode("node-1");
   assert.equal(queue.enqueued[0]!.type,"RESTORE");
 });
 
-test("PgPolicyEnforcer.stage broadcasts a real APPLY_FIREWALL command to every active node",async()=>{
+test("PgPolicyEnforcer.stage broadcasts a real APPLY_FIREWALL command to every active node and persists it to policy_commits",async()=>{
   const queue=new FakeCommandQueue();
   const nodes=new FakeNodeRepository([testNode("n1"),testNode("n2")]);
-  const enforcer=new PgPolicyEnforcer(queue as any,nodes as any);
+  const db=new FakeDb();
+  const enforcer=new PgPolicyEnforcer(queue as any,nodes as any,db as any);
   const policy:NetworkPolicy={
     id:"p1",name:"deny-all-dev",sourceZones:["ZONE_DEV"],destinationZones:["ZONE_PROD_APP"],
     protocols:["TCP"],destinationPorts:[443],action:"DENY",requiredRoles:[],requiresJit:false,
     priority:10,version:1,active:true
   };
-  await enforcer.stage("commit-1",[policy]);
+  await enforcer.stage("commit-1",[policy],"user-1");
+  assert.match(db.queries[0]!.text,/INSERT INTO bapc_security_core\.policy_commits/);
+  assert.deepEqual(db.queries[0]!.values,["commit-1",JSON.stringify([policy]),"user-1"]);
   assert.equal(queue.enqueued.length,2);
   assert.deepEqual(queue.enqueued.map(e=>e.nodeId).sort(),["n1","n2"]);
   for(const entry of queue.enqueued){
@@ -76,10 +83,11 @@ test("PgPolicyEnforcer.stage broadcasts a real APPLY_FIREWALL command to every a
 // only to fail unpredictably inside whatever native nft/WFP call actually
 // tried to apply it. This proves stage() now rejects it before anything is
 // ever sent.
-test("PgPolicyEnforcer.stage rejects an invalid policy before broadcasting anything",async()=>{
+test("PgPolicyEnforcer.stage rejects an invalid policy before broadcasting anything or persisting it",async()=>{
   const queue=new FakeCommandQueue();
   const nodes=new FakeNodeRepository([testNode("n1")]);
-  const enforcer=new PgPolicyEnforcer(queue as any,nodes as any);
+  const db=new FakeDb();
+  const enforcer=new PgPolicyEnforcer(queue as any,nodes as any,db as any);
   const invalidPortPolicy:NetworkPolicy={
     id:"p1",name:"bad-port",sourceZones:["ZONE_DEV"],destinationZones:["ZONE_PROD_APP"],
     protocols:["TCP"],destinationPorts:[99999],action:"DENY",requiredRoles:[],requiresJit:false,
@@ -87,17 +95,41 @@ test("PgPolicyEnforcer.stage rejects an invalid policy before broadcasting anyth
   };
   await assert.rejects(()=>enforcer.stage("commit-1",[invalidPortPolicy]),/invalid port/);
   assert.equal(queue.enqueued.length,0);
+  assert.equal(db.queries.length,0);
 });
 
-test("PgPolicyEnforcer.rollback broadcasts ROLLBACK_FIREWALL to every active node",async()=>{
+test("PgPolicyEnforcer.stage defaults initiatedBy to a well-known system id when the caller doesn't track one",async()=>{
+  const db=new FakeDb();
+  const enforcer=new PgPolicyEnforcer(new FakeCommandQueue() as any,new FakeNodeRepository([]) as any,db as any);
+  const policy:NetworkPolicy={
+    id:"p1",name:"deny-all-dev",sourceZones:["ZONE_DEV"],destinationZones:["ZONE_PROD_APP"],
+    protocols:["TCP"],destinationPorts:[443],action:"DENY",requiredRoles:[],requiresJit:false,
+    priority:10,version:1,active:true
+  };
+  await enforcer.stage("commit-1",[policy]);
+  assert.equal(db.queries[0]!.values[2],"00000000-0000-0000-0000-000000000000");
+});
+
+test("PgPolicyEnforcer.rollback broadcasts ROLLBACK_FIREWALL to every active node and marks the commit rolled back",async()=>{
   const queue=new FakeCommandQueue();
   const nodes=new FakeNodeRepository([testNode("n1")]);
-  const enforcer=new PgPolicyEnforcer(queue as any,nodes as any);
+  const db=new FakeDb();
+  const enforcer=new PgPolicyEnforcer(queue as any,nodes as any,db as any);
   await enforcer.rollback("commit-1");
+  assert.match(db.queries[0]!.text,/UPDATE bapc_security_core\.policy_commits SET status='ROLLED_BACK'/);
+  assert.deepEqual(db.queries[0]!.values,["commit-1"]);
   assert.equal(queue.enqueued.length,1);
   assert.equal(queue.enqueued[0]!.nodeId,"n1");
   assert.equal(queue.enqueued[0]!.type,"ROLLBACK_FIREWALL");
   assert.deepEqual(queue.enqueued[0]!.payload,{commitId:"commit-1"});
+});
+
+test("PgPolicyEnforcer.commit marks the commit committed",async()=>{
+  const db=new FakeDb();
+  const enforcer=new PgPolicyEnforcer(new FakeCommandQueue() as any,new FakeNodeRepository([]) as any,db as any);
+  await enforcer.commit("commit-1");
+  assert.match(db.queries[0]!.text,/UPDATE bapc_security_core\.policy_commits SET status='COMMITTED'/);
+  assert.deepEqual(db.queries[0]!.values,["commit-1"]);
 });
 
 test("PgMeshCommandSink.sever enqueues QUARANTINE for the target node",async()=>{

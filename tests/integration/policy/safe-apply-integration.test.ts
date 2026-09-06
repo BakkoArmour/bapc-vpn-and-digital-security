@@ -24,6 +24,10 @@ class FakeNodes {
   async findByPublicKey(){return undefined;}
   async save(){}
 }
+class FakeDb {
+  queries:Array<{text:string;values:unknown[]}>=[];
+  async query(text:string,values:unknown[]=[]){this.queries.push({text,values});return {rows:[]};}
+}
 const testNode=(id:string):MeshNode=>({
   id,deviceId:`device-${id}`,wireGuardPublicKey:"pk",internalIpv4:"10.144.0.2",
   internalIpv6:"fd14::2",listenPort:51820,nodeType:"SERVER",zone:"ZONE_PROD_APP",active:true
@@ -34,23 +38,32 @@ const policy:NetworkPolicy={
   priority:10,version:1,active:true
 };
 
-test("SafeApplyService.apply delivers a real APPLY_FIREWALL command to every active node, then commits when the probe is healthy",async()=>{
+test("SafeApplyService.apply delivers a real APPLY_FIREWALL command to every active node, persists the commit, then commits when the probe is healthy",async()=>{
   const queue=new FakeQueue();
-  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodes([testNode("n1"),testNode("n2")]) as any);
+  const db=new FakeDb();
+  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodes([testNode("n1"),testNode("n2")]) as any,db as any);
   const service=new SafeApplyService(enforcer,{verifyControlPlane:async()=>true},new MemoryBus(),new RandomIds(),new SystemClock());
-  const result=await service.apply([policy],5_000);
+  const result=await service.apply([policy],5_000,"user-1");
   assert.equal(result.status,"COMMITTED");
   assert.equal(queue.enqueued.length,2);
   assert.ok(queue.enqueued.every(e=>e.type==="APPLY_FIREWALL"));
   // Committing doesn't also send a rollback.
   assert.equal(queue.enqueued.some(e=>e.type==="ROLLBACK_FIREWALL"),false);
+  // policy_commits existed with no write path at all — SafeApplyService's
+  // whole stage/commit/rollback lifecycle previously lived only in an
+  // in-memory Map whose stored value was never even read back.
+  assert.match(db.queries[0]!.text,/INSERT INTO bapc_security_core\.policy_commits/);
+  assert.equal(db.queries[0]!.values[2],"user-1");
+  assert.match(db.queries.at(-1)!.text,/UPDATE bapc_security_core\.policy_commits SET status='COMMITTED'/);
 });
 
 test("SafeApplyService.apply rolls back a bad policy on every active node when the control plane probe fails",async()=>{
   const queue=new FakeQueue();
-  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodes([testNode("n1")]) as any);
+  const db=new FakeDb();
+  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodes([testNode("n1")]) as any,db as any);
   const service=new SafeApplyService(enforcer,{verifyControlPlane:async()=>false},new MemoryBus(),new RandomIds(),new SystemClock());
   const result=await service.apply([policy],5_000);
   assert.equal(result.status,"ROLLED_BACK");
   assert.deepEqual(queue.enqueued.map(e=>e.type),["APPLY_FIREWALL","ROLLBACK_FIREWALL"]);
+  assert.match(db.queries.at(-1)!.text,/UPDATE bapc_security_core\.policy_commits SET status='ROLLED_BACK'/);
 });
