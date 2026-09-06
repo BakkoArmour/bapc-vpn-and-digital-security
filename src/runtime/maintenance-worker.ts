@@ -2,6 +2,7 @@ import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 import {loadConfig} from "../config.js";
 import {Postgres} from "../infrastructure/postgres/client.js";
 import {OutboxDispatcher} from "../infrastructure/postgres/outbox.js";
+import {OutboxEventSigner} from "../infrastructure/outbox-event-signer.js";
 import {RetentionService} from "../infrastructure/postgres/maintenance.js";
 import {PgRepositories} from "../infrastructure/postgres/repositories.js";
 import {PgCommandQueue} from "../../services/mesh-controller/pg-command-queue.js";
@@ -33,8 +34,16 @@ await hydrateSecretsFromAws();
 const config=loadConfig();
 const db=new Postgres(config.databaseUrl);
 
+// EVENT_SIGNING_SECRET (config.ts) was loaded and even enforced at
+// production strength with nothing that ever actually signed anything with
+// it — every outbound event went out unsigned. A receiving sibling app can
+// verify this signature (OutboxEventSigner.verify, same HMAC-SHA256 over
+// topic+payload) once a real transport exists to carry it — see the
+// class comment for why that transport is still a structured log here.
+const eventSigner=new OutboxEventSigner(config.eventSigningSecret);
 const dispatcher=new OutboxDispatcher(db,async(topic,event)=>{
-  console.log(JSON.stringify({event:"outbox.delivered",topic,payload:event}));
+  const signature=eventSigner.sign(topic,event);
+  console.log(JSON.stringify({event:"outbox.delivered",topic,payload:event,signature}));
 });
 const retention=new RetentionService(db);
 
