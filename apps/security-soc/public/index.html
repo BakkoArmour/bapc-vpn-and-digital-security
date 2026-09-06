@@ -10,6 +10,7 @@
   header h1{font-size:16px;margin:0;font-weight:600;}
   header input{background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:6px 10px;border-radius:6px;width:360px;}
   header button{background:#238636;border:none;color:white;padding:6px 14px;border-radius:6px;cursor:pointer;}
+  header button.danger{background:#da3633;margin-left:auto;}
   main{padding:24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;}
   .card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px;}
   .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#8b949e;margin:0 0 10px;}
@@ -31,6 +32,7 @@
   <input id="token" placeholder="Bearer token" type="password">
   <button id="connect">Connect</button>
   <span id="status" class="err"></span>
+  <button id="lockdown" class="danger">Emergency Lockdown</button>
 </header>
 <main>
   <div class="card"><h2>Devices</h2><div class="stat" id="statDevices">–</div></div>
@@ -93,15 +95,25 @@ async function refresh() {
     const nodesBody = document.querySelector("#nodesTable tbody");
     nodesBody.innerHTML = "";
     for (const n of snapshot.nodes) {
-      nodesBody.appendChild(row([
-        n.id.slice(0, 8), n.zone, n.nodeType, n.active ? "yes" : "no",
-        actionButton("Quarantine", async () => {
-          const reason = prompt("Quarantine reason (min 12 chars):");
-          if (!reason) return;
+      const actions = document.createElement("span");
+      actions.style.display = "flex"; actions.style.gap = "6px";
+      actions.appendChild(actionButton("Quarantine", async () => {
+        const reason = prompt("Quarantine reason (min 12 chars):");
+        if (!reason) return;
+        try {
           await api(`/api/v1/nodes/${n.id}/quarantine`, { method: "POST", body: JSON.stringify({ reason }) });
           refresh();
-        })
-      ]));
+        } catch (err) { document.getElementById("status").textContent = err.message; }
+      }));
+      actions.appendChild(actionButton("Restore", async () => {
+        const clearanceToken = prompt("Signed Diagnostics clearance token (diag-clearance:...):");
+        if (!clearanceToken) return;
+        try {
+          await api(`/api/v1/nodes/${n.id}/restore`, { method: "POST", body: JSON.stringify({ clearanceToken }) });
+          refresh();
+        } catch (err) { document.getElementById("status").textContent = err.message; }
+      }));
+      nodesBody.appendChild(row([n.id.slice(0, 8), n.zone, n.nodeType, n.active ? "yes" : "no", actions]));
     }
 
     const eventsBody = document.querySelector("#eventsTable tbody");
@@ -122,6 +134,23 @@ document.getElementById("connect").onclick = () => {
   refresh();
   clearInterval(window.__pollTimer);
   window.__pollTimer = setInterval(refresh, 10000);
+};
+
+document.getElementById("lockdown").onclick = async () => {
+  if (!confirm("This isolates every active node and terminates every active JIT grant across the ecosystem. Continue?")) return;
+  const reason = prompt("Detailed emergency reason (min 20 characters):");
+  if (!reason) return;
+  const confirmation = prompt('Type LOCKDOWN to confirm:');
+  if (confirmation !== "LOCKDOWN") { document.getElementById("status").textContent = "Lockdown cancelled: confirmation text did not match."; return; }
+  try {
+    const result = await api("/api/v1/soc/emergency-lockdown", { method: "POST", body: JSON.stringify({ reason, confirmation }) });
+    document.getElementById("status").textContent = `Lockdown executed (scope: ${result.scope}).`;
+    document.getElementById("status").className = "";
+    refresh();
+  } catch (err) {
+    document.getElementById("status").textContent = err.message;
+    document.getElementById("status").className = "err";
+  }
 };
 </script>
 </body>
