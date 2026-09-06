@@ -8,10 +8,18 @@ export interface RelayHealth {
 }
 export interface PathCandidate {kind:"DIRECT"|"LOCAL_RELAY"|"REGIONAL_RELAY";endpoint:string;score:number;}
 export class RelayRoutingService {
-  select(directEndpoint:string|undefined,localRelay:RelayHealth|undefined,regional:RelayHealth[],now=new Date()):PathCandidate[]{
+  // `local` and `regional` are caller-partitioned (see MeshController.
+  // selectRelayEndpoint, the only real caller): every relay whose own region
+  // matches the requesting node's region goes in `local` and scores in the
+  // LOCAL_RELAY tier above every REGIONAL_RELAY candidate, regardless of
+  // individual latency/load — a same-region hop is assumed better-placed
+  // than a healthier-looking but geographically distant one. This only
+  // claims a tiering by known region, never a real measured latency
+  // improvement this architecture has no way to observe.
+  select(directEndpoint:string|undefined,local:RelayHealth[],regional:RelayHealth[],now=new Date()):PathCandidate[]{
     const out:PathCandidate[]=[];
     if(directEndpoint)out.push({kind:"DIRECT",endpoint:directEndpoint,score:1000});
-    if(localRelay&&this.healthy(localRelay,now))out.push({kind:"LOCAL_RELAY",endpoint:localRelay.endpoint,score:800-this.penalty(localRelay)});
+    for(const r of local.filter(x=>this.healthy(x,now)))out.push({kind:"LOCAL_RELAY",endpoint:r.endpoint,score:800-this.penalty(r)});
     for(const r of regional.filter(x=>this.healthy(x,now)))out.push({kind:"REGIONAL_RELAY",endpoint:r.endpoint,score:600-this.penalty(r)});
     return out.sort((a,b)=>b.score-a.score);
   }

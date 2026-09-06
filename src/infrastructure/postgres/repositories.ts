@@ -123,6 +123,24 @@ export class PgRepositories implements DeviceRepository,NodeRepository,
       [d.id,d.hostname,d.hardwareId,d.platform,d.osVersion,d.publicAttestationKey??null,d.compromised,d.revoked,d.posture,d.createdAt,d.updatedAt]);
   }
   private async saveNode(n:MeshNode){
+    // region is only ever written when the caller explicitly supplies one:
+    // enrollment (src/api/grpc/server.ts) builds a MeshNode with no region
+    // at all (nothing in the enrollment flow knows a device's geography),
+    // and re-saving that node on a later heartbeat must not silently reset
+    // an operator's prior region assignment (PUT /api/v1/nodes/:id/region)
+    // back to the column default — so when region is undefined, it's left
+    // out of the query entirely (new rows fall through to the schema
+    // default, existing rows keep whatever they already had).
+    if(n.region!==undefined){
+      await this.q(`INSERT INTO bapc_security_core.mesh_nodes
+        (node_id,device_id,public_key,internal_ipv4,internal_ipv6,listen_port,node_type,zone_assignment,region,is_active,last_handshake)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ON CONFLICT(node_id) DO UPDATE SET public_key=EXCLUDED.public_key,
+        zone_assignment=EXCLUDED.zone_assignment,region=EXCLUDED.region,
+        is_active=EXCLUDED.is_active,last_handshake=EXCLUDED.last_handshake`,
+        [n.id,n.deviceId,n.wireGuardPublicKey,n.internalIpv4,n.internalIpv6,n.listenPort,n.nodeType,n.zone,n.region,n.active,n.lastHandshake??null]);
+      return;
+    }
     await this.q(`INSERT INTO bapc_security_core.mesh_nodes
       (node_id,device_id,public_key,internal_ipv4,internal_ipv6,listen_port,node_type,zone_assignment,is_active,last_handshake)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
@@ -157,7 +175,7 @@ export class PgRepositories implements DeviceRepository,NodeRepository,
   private node(x:any):MeshNode{return {
     id:x.node_id,deviceId:x.device_id,wireGuardPublicKey:x.public_key,
     internalIpv4:String(x.internal_ipv4),internalIpv6:String(x.internal_ipv6),
-    listenPort:x.listen_port,nodeType:x.node_type,zone:x.zone_assignment,
+    listenPort:x.listen_port,nodeType:x.node_type,zone:x.zone_assignment,region:x.region,
     active:x.is_active,lastHandshake:x.last_handshake?date(x.last_handshake):undefined
   } as MeshNode;}
   private policy(x:any):NetworkPolicy{

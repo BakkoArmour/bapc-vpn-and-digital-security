@@ -310,6 +310,22 @@ router.add("POST","/api/v1/jit/:id/terminate",["security-approver"],async({claim
   return result;
 });
 
+// mesh_nodes.region (db/019_mesh_node_region.sql) — a geographic placement,
+// deliberately separate from `zone` (a security classification). Nothing in
+// the enrollment flow (src/api/grpc/server.ts) knows a device's real-world
+// location, so this is the only way a node's region is ever set; until an
+// operator calls this, RelayRoutingService/MeshController correctly treat
+// the node as having no known region rather than guessing one.
+router.add("PUT","/api/v1/nodes/:id/region",["security-approver"],async({claims,params,body})=>{
+  const region=String(body.region??"").trim();
+  if(!region)throw new HttpError(400,"region is required","invalid_request");
+  const node=await repo.get(params.id!);
+  if(!node||!("wireGuardPublicKey" in node))throw new HttpError(404,"node not found","not_found");
+  await repo.save({...(node as any),region});
+  await audit.record(claims.sub,"NODE_REGION_SET",params.id!,{region});
+  return {nodeId:params.id!,region};
+},{idempotent:true});
+
 router.add("POST","/api/v1/nodes/:id/quarantine",["security-approver"],async({claims,params,body})=>{
   const reason=String(body.reason??"manual SOC quarantine");
   const result=await threatResponse.handle({

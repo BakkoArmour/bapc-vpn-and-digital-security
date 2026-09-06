@@ -1,5 +1,5 @@
 import {createHash} from "node:crypto";
-import type {MeshNode,SecurityZone} from "../../src/domain/types.js";
+import {UNASSIGNED_REGION,type MeshNode,type SecurityZone} from "../../src/domain/types.js";
 import {RelayRoutingService, type RelayHealth} from "../../src/application/relay-routing.js";
 import {canonicalJson} from "../../src/infrastructure/canonical-json.js";
 
@@ -61,7 +61,7 @@ export class MeshController {
   // when something has actually drifted instead of unconditionally
   // resending on every check.
   async planFor(node:MeshNode,all:MeshNode[],relayEndpoint?:string){
-    const resolvedRelayEndpoint=relayEndpoint??await this.selectRelayEndpoint();
+    const resolvedRelayEndpoint=relayEndpoint??await this.selectRelayEndpoint(node.region??UNASSIGNED_REGION);
     const peers=all.filter(p=>p.active&&p.id!==node.id)
       .filter(p=>this.allowed(node.zone,p.zone))
       .map<MeshPeerPlan>(p=>({
@@ -78,17 +78,23 @@ export class MeshController {
     const topologyHash=createHash("sha256").update(canonicalJson(applyPeersPayload(peers))).digest("hex");
     return {peers,topologyHash};
   }
-  // No per-node geographic region exists anywhere in this schema (MeshNode's
-  // "zone" is a security classification — ZONE_PROD_APP, ZONE_DEV — not a
-  // geography), so there's no real "local" relay to distinguish from
-  // "regional" ones. Every healthy relay is scored as a REGIONAL_RELAY
-  // candidate; the highest-scoring one wins, or DIRECT if none exist —
-  // exactly the prior behavior when no relay was ever available, now
-  // correctly extended to prefer a relay once one actually is.
-  private async selectRelayEndpoint():Promise<string|undefined>{
+  // mesh_nodes.region (db/019) is a geographic placement — deliberately
+  // separate from `zone`, a security classification (ZONE_PROD_APP,
+  // ZONE_DEV, ...) that has nothing to do with where a node physically is.
+  // A relay sharing the requesting node's region is genuinely LOCAL_RELAY;
+  // every other healthy relay falls back to REGIONAL_RELAY, and DIRECT
+  // remains the final fallback if none exist. When the node's own region is
+  // UNASSIGNED_REGION (no operator has set one — see
+  // PUT /api/v1/nodes/:id/region), nothing can honestly be called "local"
+  // to it, so every healthy relay is treated as REGIONAL_RELAY, exactly the
+  // prior (pre-region) behavior.
+  private async selectRelayEndpoint(nodeRegion:string):Promise<string|undefined>{
     if(!this.relaySource)return undefined;
     const candidates=await this.relaySource.candidates();
-    const [best]=this.routing.select(undefined,undefined,candidates);
+    const knownRegion=nodeRegion!==UNASSIGNED_REGION;
+    const local=knownRegion?candidates.filter(c=>c.region===nodeRegion):[];
+    const regional=knownRegion?candidates.filter(c=>c.region!==nodeRegion):candidates;
+    const [best]=this.routing.select(undefined,local,regional);
     return best&&best.kind!=="DIRECT"?best.endpoint:undefined;
   }
   async quarantine(nodeId:string){await this.sink.sever(nodeId);}

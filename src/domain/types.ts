@@ -8,7 +8,17 @@ export type ThreatLevel = 0 | 1 | 2 | 3;
  
 export interface DevicePosture { osCurrent: boolean; diskEncrypted: boolean; secureBoot: boolean; firewallEnabled: boolean; agentHealthy: boolean; bannedProcessFound: boolean; assessedAt: Date; }
 export interface Device { id: UUID; hostname: string; hardwareId: string; platform: Platform; osVersion: string; publicAttestationKey?: string; compromised: boolean; revoked: boolean; posture: DevicePosture; createdAt: Date; updatedAt: Date; }
-export interface MeshNode { id: UUID; deviceId: UUID; wireGuardPublicKey: string; internalIpv4: string; internalIpv6: string; listenPort: number; nodeType: NodeType; zone: SecurityZone; active: boolean; lastHandshake?: Date; }
+// Sentinel for a node with no operator-assigned geography yet (db/019's
+// column default) — deliberately not a real region code, so routing never
+// mistakes "unset" for a genuine LOCAL_RELAY match.
+export const UNASSIGNED_REGION = "unassigned";
+// `region` is a geographic placement (e.g. "us-east-1"), entirely separate
+// from `zone` (a security classification like ZONE_PROD_APP) — see
+// MeshController's own comment on why those must never be conflated.
+// Optional (like lastHandshake) rather than defaulted to UNASSIGNED_REGION
+// here: real rows always carry one (db/019's column default), but plenty of
+// callers build a MeshNode without caring about geography at all.
+export interface MeshNode { id: UUID; deviceId: UUID; wireGuardPublicKey: string; internalIpv4: string; internalIpv6: string; listenPort: number; nodeType: NodeType; zone: SecurityZone; region?: string; active: boolean; lastHandshake?: Date; }
 export interface IdentityContext { userId: UUID; roles: string[]; attributes: Record<string,string>; mfa: boolean; sourceIp: string; }
 export interface ResourceContext { resource: string; zone: SecurityZone; protocol: "TCP"|"UDP"|"ICMP"|"ANY"; port?: number; }
 export interface NetworkPolicy { id: UUID; name: string; sourceZones: SecurityZone[]; destinationZones: SecurityZone[]; protocols: Array<ResourceContext["protocol"]>; destinationPorts: number[]; action: PolicyAction; requiredRoles: string[]; requiresJit: boolean; priority: number; version: number; active: boolean; }
