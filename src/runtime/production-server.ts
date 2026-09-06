@@ -1,5 +1,7 @@
 import {createServer} from "node:http";
+import {randomUUID} from "node:crypto";
 import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
+import {HttpError} from "../api/rest/errors.js";
 import {loadConfig} from "../config.js";
 import {Postgres} from "../infrastructure/postgres/client.js";
 import {PgRepositories} from "../infrastructure/postgres/repositories.js";
@@ -28,6 +30,8 @@ import {ForgeX509Builder} from "../../services/trust-core/x509-forge.js";
 import {TrustCoreCertificateIssuer} from "../../services/trust-core/trust-core-certificate-issuer.js";
 import {ForgeCrlBuilder} from "../../services/trust-core/crl-builder.js";
 import {PgCertificateStore} from "../../services/trust-core/pg-certificate-store.js";
+import {loadRelayFleet} from "../../services/relay-fleet/load-relay-fleet.js";
+import {PgRelayStore} from "../../services/relay-fleet/pg-relay-store.js";
 import type {NetworkPolicy} from "../domain/types.js";
 
 await hydrateSecretsFromAws();
@@ -75,6 +79,8 @@ const socBackend=new SecuritySocBackend(
 );
 
 const crlBuilder=new ForgeCrlBuilder();
+const relayFleet=loadRelayFleet();
+const relayStore=new PgRelayStore(db);
 
 const guard=new HmacBearerGuard(config.controlApiTokenSecret);
 const router=new RestRouter(guard,new PgIdempotencyStore(db),true,new PgReplayStore(db));
@@ -195,6 +201,29 @@ router.add("POST","/api/v1/access/decide",["security-agent"],async({body})=>{
   };
   return policyDecision.decide(identity,device as any,node as any,resource);
 },{rateLimit:{limit:300,windowMs:60_000}});
+
+// Real AWS EC2 relay auto-provisioning — see services/relay-fleet/. Returns
+// a clear 501 "coming soon" instead of crashing when no AWS account/AMI is
+// configured yet; the existing manually-inserted-relay path is unaffected.
+router.add("POST","/api/v1/relays/provision",["security-owner"],async({body})=>{
+  if(!relayFleet)throw new HttpError(501,"AWS relay auto-provisioning is not configured yet — set AWS_RELAY_AMI_ID and AWS_RELAY_REGION (coming soon)","not_configured");
+  const region=String(body.region??relayFleet.region);
+  const instanceType=String(body.instanceType??"t3.small");
+  const instance=await relayFleet.provisioner.launch({region,instanceType});
+  const relayId=randomUUID();
+  await relayStore.insert(relayId,region,instance.endpoint,instance.instanceId);
+  return {relayId,...instance};
+},{rateLimit:{limit:5,windowMs:60_000}});
+
+router.add("POST","/api/v1/relays/:id/terminate",["security-owner"],async({params})=>{
+  if(!relayFleet)throw new HttpError(501,"AWS relay auto-provisioning is not configured yet — set AWS_RELAY_AMI_ID and AWS_RELAY_REGION (coming soon)","not_configured");
+  const relay=await relayStore.get(params.id!);
+  if(!relay)throw new HttpError(404,"relay not found","not_found");
+  if(!relay.instanceId)throw new HttpError(400,"this relay has no associated AWS instance to terminate — it was added manually","invalid_request");
+  await relayFleet.provisioner.terminate(relay.instanceId);
+  await relayStore.remove(relay.relayId);
+  return {terminated:true};
+},{rateLimit:{limit:5,windowMs:60_000}});
 
 const server=createServer((req,res)=>void router.handle(req,res));
 server.requestTimeout=15_000;

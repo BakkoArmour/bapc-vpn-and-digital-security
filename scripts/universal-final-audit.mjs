@@ -95,7 +95,7 @@ for (const item of [
   "Native Linux/Windows adapters exercised on a real elevated host with WireGuard/nftables/WFP installed",
   "Apple NetworkExtension client built and signed under an Apple Developer Program account",
   "Signed, notarized/authenticode installers for every platform",
-  "Multi-region relay/egress hosting with real fixed IPs and failover drills",
+  "Actually running relay fleet nodes in multiple real regions and rehearsing a failover drill (single-node AWS EC2 auto-provisioning is real and wired — services/relay-fleet/ — once AWS_RELAY_AMI_ID/AWS_RELAY_REGION are set and a golden AMI is baked per docs/RELAY-FLEET-AMI.md)",
   "Point-in-time database restore rehearsed into an isolated environment",
   "Independent third-party penetration test with no unresolved critical/high findings",
   "Live incident-response, disaster-recovery and on-call rehearsal",

@@ -73,7 +73,10 @@ This is a strict-TypeScript control plane with:
   blind relay, and a real minimal SOCKS5 egress proxy. Both adapters also
   implement route-integrity monitoring/restoration (`AgentReconciler`,
   feature catalog #56-60) — wired into the endpoint agent via a `RECONCILE`
-  controller command.
+  controller command. `POST /api/v1/relays/provision` boots real relay fleet
+  nodes on AWS EC2 (`services/relay-fleet/`) from a pre-baked golden AMI
+  (`docs/RELAY-FLEET-AMI.md`) when `AWS_RELAY_AMI_ID`/`AWS_RELAY_REGION` are
+  set — real, wired code, not a stub — returning a clear 501 otherwise.
 - **Secure DNS**: a real UDP DNS server with threat-feed/DGA sinkholing and
   a DNS-over-HTTPS upstream client.
 - **Recovery & intelligence**: an out-of-band recovery channel on its own
@@ -100,8 +103,9 @@ ceremony on an air-gapped HSM (AWS KMS-backed intermediate signing is real
 and wired — see Trust Core above — but that's a single cloud account, not an
 air-gapped HSM under multi-party physical custody), an Apple NetworkExtension
 client (macOS/iOS/iPadOS — see `native/apple/adapter.ts`), signed/notarized
-installers, live multi-region relay/egress hosting, and an independent
-penetration test.
+installers, actually running relay fleet nodes across multiple real regions
+and drilling failover between them (single-node AWS EC2 provisioning is real
+and wired — see Network plane above), and an independent penetration test.
 
 The original build specifications and code packets this repository was
 reconstructed from are archived under `docs/build-source/`.

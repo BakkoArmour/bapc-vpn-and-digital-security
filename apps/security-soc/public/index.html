@@ -81,8 +81,8 @@
   </div>
 
   <div class="card">
-    <h2>Relays</h2>
-    <table id="relaysTable"><thead><tr><th>Region</th><th>Endpoint</th><th>Load%</th><th>Up</th></tr></thead><tbody></tbody></table>
+    <h2>Relays <button class="action" id="newRelay" style="float:right">Provision Relay</button></h2>
+    <table id="relaysTable"><thead><tr><th>Region</th><th>Endpoint</th><th>Load%</th><th>Up</th><th>Actions</th></tr></thead><tbody></tbody></table>
   </div>
 
   <div class="card full">
@@ -305,7 +305,21 @@ async function refresh() {
     const relaysBody = document.querySelector("#relaysTable tbody");
     relaysBody.innerHTML = "";
     for (const r of full.relays) {
-      relaysBody.appendChild(row([r.region, r.endpoint, r.load_percent, r.is_available ? "yes" : "no"]));
+      const terminateBtn = actionButton("Terminate", async () => {
+        const values = await openForm({
+          title: "Terminate Relay",
+          description: `Terminate relay ${r.region} (${r.endpoint})? This destroys its AWS instance.`,
+          danger: true,
+          confirmLabel: "Terminate",
+          fields: []
+        });
+        if (!values) return;
+        try {
+          await api(`/api/v1/relays/${r.relay_id}/terminate`, { method: "POST" });
+          refresh();
+        } catch (err) { setStatus(err.message, true); }
+      });
+      relaysBody.appendChild(row([r.region, r.endpoint, r.load_percent, r.is_available ? "yes" : "no", terminateBtn]));
     }
 
     const nodesBody = document.querySelector("#nodesTable tbody");
@@ -400,6 +414,27 @@ document.getElementById("newJit").onclick = async () => {
       durationMinutes: Number(values.durationMinutes), justification: values.justification
     }) });
     setStatus("JIT request submitted.", false);
+    refresh();
+  } catch (err) { setStatus(err.message, true); }
+};
+
+document.getElementById("newRelay").onclick = async () => {
+  const values = await openForm({
+    title: "Provision Relay",
+    description: "Boots a new relay fleet node on AWS EC2 from the configured golden AMI.",
+    confirmLabel: "Provision",
+    fields: [
+      {name: "region", label: "AWS region (blank uses the server's configured default)", type: "text"},
+      {name: "instanceType", label: "Instance type", type: "select", options: ["t3.small", "t3.medium", "t3.large"], value: "t3.small"}
+    ]
+  });
+  if (!values) return;
+  try {
+    setStatus("Provisioning relay — this polls AWS for a public IP and can take a minute...", false);
+    const result = await api("/api/v1/relays/provision", { method: "POST", body: JSON.stringify({
+      ...(values.region ? { region: values.region } : {}), instanceType: values.instanceType
+    }) });
+    setStatus(`Relay provisioned: ${result.endpoint}`, false);
     refresh();
   } catch (err) { setStatus(err.message, true); }
 };

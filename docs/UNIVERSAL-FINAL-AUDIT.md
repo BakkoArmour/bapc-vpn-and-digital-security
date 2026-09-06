@@ -47,8 +47,14 @@ reference:
   Developer Program account (does not exist in this repository — see
   `native/apple/adapter.ts`).
 - Signed, notarized/Authenticode installers for every supported platform.
-- Multi-region relay/egress hosting with real fixed IPs and a real failover
-  drill.
+- Actually running relay fleet nodes in multiple real regions and rehearsing
+  a failover drill between them. (Provisioning a single relay node on real
+  AWS EC2 infrastructure is real and wired —
+  `services/relay-fleet/aws-ec2-relay-provisioner.ts`, `POST
+  /api/v1/relays/provision` — once `AWS_RELAY_AMI_ID`/`AWS_RELAY_REGION` are
+  set and a golden AMI is baked per `docs/RELAY-FLEET-AMI.md`; standing up
+  several across regions and drilling failover between them is still a live
+  operational exercise this can't self-certify.)
 - A point-in-time database restore, rehearsed into an isolated environment.
 - An independent third-party penetration test with no unresolved
   critical/high findings.
