@@ -57,7 +57,7 @@ export class PgPolicyEnforcer implements PolicyEnforcer {
   private compiler=new PolicyCompiler();
   constructor(private queue:PgCommandQueue,private nodes:NodeRepository,private db:PgQueryable){}
 
-  async stage(commitId:string,policies:NetworkPolicy[],initiatedBy?:string):Promise<void>{
+  async stage(commitId:string,policies:NetworkPolicy[],initiatedBy?:string):Promise<{targetedNodeIds:string[]}>{
     // PolicyCompiler existed fully built and tested (invalid zone/port
     // rejection) with no caller anywhere — a policy with a typo'd zone name
     // or an out-of-range port would previously be broadcast to every node's
@@ -73,9 +73,14 @@ export class PgPolicyEnforcer implements PolicyEnforcer {
       [commitId,JSON.stringify(policies),initiatedBy??SYSTEM_INITIATOR]
     );
     const rules=firewallRulesFor(policies);
-    for(const node of await this.nodes.list()){
+    const nodes=await this.nodes.list();
+    for(const node of nodes){
       await this.queue.enqueue(node.id,"APPLY_FIREWALL",{commitId,defaultAction:"DENY",rules});
     }
+    // Reported back so SafeApplyService (src/application/safe-apply.ts) can
+    // verify each targeted node individually afterward, instead of only
+    // checking the control plane's own database health.
+    return {targetedNodeIds:nodes.map(n=>n.id)};
   }
 
   async commit(commitId:string):Promise<void>{

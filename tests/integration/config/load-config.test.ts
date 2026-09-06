@@ -13,6 +13,19 @@ test("defaults oobControllerUrl and oobSharedSecret when unset",()=>{
   assert.equal(config.oobSharedSecret,"development-oob-shared-secret-change-me");
 });
 
+// SAFE_APPLY_NODE_FAILURE_THRESHOLD had no wiring at all before
+// SafeApplyService started verifying per-node acknowledgements — this pins
+// down both the strict-by-default value and that it rejects an out-of-range
+// override rather than silently clamping it.
+test("defaults safeApplyNodeFailureThreshold to 0 (strictest) and accepts a real override",()=>{
+  assert.equal(loadConfig({}).safeApplyNodeFailureThreshold,0);
+  assert.equal(loadConfig({SAFE_APPLY_NODE_FAILURE_THRESHOLD:"0.25"}).safeApplyNodeFailureThreshold,0.25);
+});
+
+test("rejects a safeApplyNodeFailureThreshold outside 0-1",()=>{
+  assert.throws(()=>loadConfig({SAFE_APPLY_NODE_FAILURE_THRESHOLD:"1.5"}),/between 0 and 1/);
+});
+
 test("production rejects a short or missing OOB_SHARED_SECRET even if the other secrets are fine",()=>{
   assert.throws(()=>loadConfig({
     NODE_ENV:"production",

@@ -28,6 +28,20 @@ class FakeDb {
   queries:Array<{text:string;values:unknown[]}>=[];
   async query(text:string,values:unknown[]=[]){this.queries.push({text,values});return {rows:[]};}
 }
+// The real PgRolloutStore is exercised on its own (pg-rollout-store.test.ts)
+// — this fake just reports every targeted node SUCCEEDED as soon as it's
+// asked, so these tests can focus on proving PgPolicyEnforcer's own wiring
+// (APPLY_FIREWALL delivery, policy_commits persistence) without waiting out
+// SafeApplyService's real polling/timeout window for a fake command queue
+// that never produces a real command_acknowledgements row on its own.
+class FakeRolloutStore {
+  private targets:string[]=[];
+  async start(_commitId:string,nodeIds:string[]){this.targets=nodeIds;}
+  async refresh(){return this.summary();}
+  async finalizeTimeouts(){}
+  async markRolledBack(){}
+  async summary(){return this.targets.map(nodeId=>({nodeId,status:"SUCCEEDED" as const,details:{}}));}
+}
 const testNode=(id:string):MeshNode=>({
   id,deviceId:`device-${id}`,wireGuardPublicKey:"pk",internalIpv4:"10.144.0.2",
   internalIpv6:"fd14::2",listenPort:51820,nodeType:"SERVER",zone:"ZONE_PROD_APP",active:true
@@ -42,7 +56,7 @@ test("SafeApplyService.apply delivers a real APPLY_FIREWALL command to every act
   const queue=new FakeQueue();
   const db=new FakeDb();
   const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodes([testNode("n1"),testNode("n2")]) as any,db as any);
-  const service=new SafeApplyService(enforcer,{verifyControlPlane:async()=>true},new MemoryBus(),new RandomIds(),new SystemClock());
+  const service=new SafeApplyService(enforcer,{verifyControlPlane:async()=>true},new MemoryBus(),new RandomIds(),new SystemClock(),new FakeRolloutStore() as any);
   const result=await service.apply([policy],5_000,"user-1");
   assert.equal(result.status,"COMMITTED");
   assert.equal(queue.enqueued.length,2);

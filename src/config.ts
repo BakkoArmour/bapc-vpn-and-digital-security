@@ -4,6 +4,7 @@ export interface SecurityConfig {
   certificateTtlMinutes:number;
   keyRotationDays:number;
   safeApplyTimeoutMs:number;
+  safeApplyNodeFailureThreshold:number;
   authorizationRefreshMs:number;
   controlApiTokenSecret:string;
   eventSigningSecret:string;
@@ -23,6 +24,11 @@ const int=(v:string|undefined,d:number)=>{
   return n;
 };
 const bool=(v:string|undefined,d:boolean)=>v===undefined?d:/^(1|true|yes)$/i.test(v);
+const fraction=(v:string|undefined,d:number)=>{
+  const n=Number(v??d);
+  if(!Number.isFinite(n)||n<0||n>1)throw new Error("invalid fractional configuration (must be between 0 and 1)");
+  return n;
+};
 const ecosystemSecret=(v:string|undefined,name:string,production:boolean)=>{
   if(production&&(!v||v.length<32))
     throw new Error(`production ${name} shared secret must be set and at least 32 characters`);
@@ -42,6 +48,10 @@ export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
     certificateTtlMinutes:int(env.CERTIFICATE_TTL_MINUTES,1440),
     keyRotationDays:int(env.KEY_ROTATION_DAYS,30),
     safeApplyTimeoutMs:int(env.SAFE_APPLY_TIMEOUT_MS,60_000),
+    // 0 (the default) means: any targeted node that explicitly fails or
+    // never checks in within the window rolls back the whole rollout — see
+    // SafeApplyService's own comment for why that's the safe default.
+    safeApplyNodeFailureThreshold:fraction(env.SAFE_APPLY_NODE_FAILURE_THRESHOLD,0),
     authorizationRefreshMs:int(env.AUTH_REFRESH_MS,30_000),
     controlApiTokenSecret:secret||"development-only-change-me",
     eventSigningSecret:eventSecret||"development-event-secret-change-me",

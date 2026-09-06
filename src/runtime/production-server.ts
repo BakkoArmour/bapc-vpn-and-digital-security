@@ -25,6 +25,7 @@ import {HmacDecisionSigner} from "../infrastructure/hmac-decision-signer.js";
 import {EcosystemIntegrationService} from "../application/integrations.js";
 import {DiagnosticsClearanceVerifier} from "../../integrations/diagnostics-clearance.js";
 import {PgCommandQueue} from "../../services/mesh-controller/pg-command-queue.js";
+import {PgRolloutStore} from "../infrastructure/pg-rollout-store.js";
 import {SecuritySocBackend} from "../../apps/security-soc/backend.js";
 import {PgSocData} from "../../apps/security-soc/pg-soc-data.js";
 import {PgSocActions} from "../../apps/security-soc/pg-soc-actions.js";
@@ -78,10 +79,15 @@ const enforcer=new PgPolicyEnforcer(commandQueue,repo,db);
 // SafeApplyService (src/application/safe-apply.ts) existed with no caller
 // anywhere in production — a staged policy set had nowhere to be applied
 // from and nothing to auto-rollback against. PgControlPlaneProbe checks the
-// one thing synchronously verifiable from here (see its own comment for why
-// per-node reachability isn't): the database every command-delivery path
-// depends on.
-const safeApply=new SafeApplyService(enforcer,new PgControlPlaneProbe(db),bus,ids,clock);
+// control plane's own database, but success is no longer based on that
+// alone: PgRolloutStore verifies each targeted node's real
+// command_acknowledgements before a rollout is allowed to commit — see
+// SafeApplyService's own comment for why "Postgres is healthy" was never
+// sufficient proof that a policy actually reached and applied on any node.
+const rolloutStore=new PgRolloutStore(db);
+const safeApply=new SafeApplyService(
+  enforcer,new PgControlPlaneProbe(db),bus,ids,clock,rolloutStore,config.safeApplyNodeFailureThreshold
+);
 const ecosystem=new EcosystemIntegrationService(config.ecosystemSecrets,bus);
 const clearance=new DiagnosticsClearanceVerifier(ecosystem);
 
@@ -217,6 +223,15 @@ router.add("POST","/api/v1/policies/apply",["security-approver"],async({claims,b
   await audit.record(claims.sub,"POLICY_APPLIED","network-policies",{commitId:result.commitId,status:result.status,policyCount:policies.length});
   return result;
 },{rateLimit:{limit:5,windowMs:60_000}});
+
+// Per-node verification detail behind a POLICY_APPLIED result — policy_
+// commits.status alone only ever said COMMITTED/ROLLED_BACK at the fleet
+// level; this is what the SOC console's policy-commit-status panel reads to
+// show which nodes actually applied a rollout versus which one triggered a
+// rollback (see PgRolloutStore / policy_rollout_nodes).
+router.add("GET","/api/v1/policies/:commitId/rollout",["security-read"],async({params})=>
+  rolloutStore.summary(params.commitId!)
+);
 
 router.add("GET","/api/v1/events",["security-read"],async({query})=>
   repo.recent(Number(query.get("limit")??"100"))
