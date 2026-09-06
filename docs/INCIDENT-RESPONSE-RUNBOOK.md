@@ -91,16 +91,33 @@ says so explicitly rather than describing a procedure that doesn't exist.
 
 ## Relay outage
 
-1. `RelayRegistry.choose(region)` (`services/relay/registry.ts`) already
-   excludes relays whose heartbeat is >45s stale or over capacity —
-   confirm the outage is visible there before assuming client-side failure.
-2. `RelayRoutingService` (`src/application/relay-routing.ts`) falls back
-   direct → local relay → regional relay automatically; verify affected
-   nodes actually have a healthy alternative registered.
+1. `GET /api/v1/relays` (role `security-read`) lists every relay
+   `PgRelayStore` knows about and its current `is_available`/
+   `last_heartbeat`/`load_percent`/`latency_ms` — confirm the outage is
+   visible there before assuming client-side failure. A relay whose
+   `last_heartbeat` is more than 45 seconds old is automatically excluded
+   from selection (`PgRelayStore.candidates()`), regardless of what
+   `is_available` says.
+2. `MeshController.reconcile` (`services/mesh-controller/controller.ts`)
+   already routes through `RelayRoutingService` automatically on every
+   enrollment/rotation — no manual step reroutes a node once its current
+   relay drops out of the candidate pool; the next reconcile (the node's
+   own next key rotation, or another node joining/leaving its zone) picks
+   a healthy alternative if one is registered. There's no proactive
+   "reroute this node right now" trigger — see item 3 below.
+   Note: `RelayRegistry` (`services/relay/registry.ts`) referenced by an
+   earlier version of this runbook was in-memory-only in a single process
+   and had no real caller; `PgRelayStore` is its real, persisted
+   replacement, shared correctly across the separate mesh-grpc and
+   control-api processes.
 3. There is only a reference single-process `BlindRelayServer`
-   (`services/relay/relay-server.ts`) in this repository — multi-region
-   relay hosting, health-probe wiring, and failover deployment are
-   infrastructure work for your deployment target, not code in this repo.
+   (`services/relay/relay-server.ts`) in this repository, which
+   self-registers via `POST /api/v1/relays/register` when
+   `RELAY_ID`/`RELAY_REGION`/`RELAY_PUBLIC_ENDPOINT`/`BAPC_CONTROLLER_URL`/
+   `BAPC_AGENT_TOKEN` are all set — multi-region relay hosting, real
+   load/latency sampling (heartbeats currently report 0/0), health-probe
+   wiring, and failover deployment are infrastructure work for your
+   deployment target, not code in this repo.
 
 ## DNS outage
 

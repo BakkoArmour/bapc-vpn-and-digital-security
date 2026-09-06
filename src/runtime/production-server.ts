@@ -347,6 +347,11 @@ router.add("POST","/api/v1/access/decide",["security-agent"],async({body})=>{
   return policyDecision.decide(identity,device as any,node as any,resource);
 },{rateLimit:{limit:300,windowMs:60_000}});
 
+// Every relay including stale/unavailable ones — for diagnosing a relay
+// outage (docs/INCIDENT-RESPONSE-RUNBOOK.md); RelayRoutingService itself
+// only ever sees the filtered, healthy candidates() view.
+router.add("GET","/api/v1/relays",["security-read"],async()=>relayStore.list());
+
 // Real AWS EC2 relay auto-provisioning — see services/relay-fleet/. Returns
 // a clear 501 "coming soon" instead of crashing when no AWS account/AMI is
 // configured yet; the existing manually-inserted-relay path is unaffected.

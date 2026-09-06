@@ -49,6 +49,23 @@ test("PgRelayStore.heartbeat updates health and marks the relay available",async
   assert.deepEqual(queries[0]!.values,["r1",42,80]);
 });
 
+// Unlike candidates(), list() must show stale/unavailable relays too — an
+// operator diagnosing an outage needs to see what dropped out.
+test("PgRelayStore.list returns every relay, including a stale one candidates() would exclude",async()=>{
+  const store=new PgRelayStore({
+    query:async(text)=>{
+      assert.doesNotMatch(text,/WHERE/);
+      return {rows:[
+        {relay_id:"r1",region:"us-east-1",endpoint:"203.0.113.10:51900",load_percent:"10.00",latency_ms:30,is_available:true,last_heartbeat:new Date().toISOString()},
+        {relay_id:"r2",region:"us-west-2",endpoint:"203.0.113.20:51900",load_percent:"0.00",latency_ms:0,is_available:false,last_heartbeat:null}
+      ]};
+    }
+  });
+  const all=await store.list();
+  assert.equal(all.length,2);
+  assert.equal(all[1]!.available,false);
+});
+
 test("PgRelayStore.candidates only returns relays heartbeated within the freshness window",async()=>{
   const store=new PgRelayStore({
     query:async(text)=>{

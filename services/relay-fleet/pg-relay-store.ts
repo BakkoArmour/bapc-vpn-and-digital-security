@@ -39,6 +39,24 @@ export class PgRelayStore {
     await this.db.query(`DELETE FROM bapc_security_core.relays WHERE relay_id=$1`,[relayId]);
   }
 
+  // Unlike candidates() (only fresh/healthy ones, for real routing
+  // decisions), this returns every relay including stale/unavailable ones
+  // — an operator diagnosing a relay outage (see
+  // docs/INCIDENT-RESPONSE-RUNBOOK.md) needs to see what dropped out, not
+  // just what's currently usable.
+  async list():Promise<RelayHealth[]>{
+    const r=await this.db.query(
+      `SELECT relay_id,region,endpoint,load_percent,latency_ms,is_available,last_heartbeat
+       FROM bapc_security_core.relays ORDER BY region,relay_id`
+    );
+    return r.rows.map((row:any)=>({
+      id:row.relay_id,region:row.region,endpoint:row.endpoint,
+      latencyMs:Number(row.latency_ms),loadPercent:Number(row.load_percent),
+      available:row.is_available,
+      lastHeartbeat:row.last_heartbeat?new Date(row.last_heartbeat):new Date(0)
+    }));
+  }
+
   // relays.load_percent/latency_ms/last_heartbeat (db/002_operational_tables.sql)
   // existed with no write path at all — a relay's health was whatever it
   // was set to at insert() time (load 0, latency 0) forever after, since
