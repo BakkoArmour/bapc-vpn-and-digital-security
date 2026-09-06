@@ -81,7 +81,7 @@ test("live: a signal recorded before a simulated restart still contributes to co
         reauthenticate:async()=>{},terminateJit:async()=>{actions.push("jit");},
         isolate:async()=>{actions.push("isolate");},revokeNodeCertificates:async()=>{},
         rotateMeshIdentity:async()=>{},restore:async()=>{}
-      },{open:async()=>{},event:async()=>{}}),
+      },{open:async()=>{},event:async()=>{},close:async()=>0}),
       300_000,undefined,new PgThreatSignalStore(db)
     );
     await buildCorrelator([]).ingest({nodeId,kind:"failed_auth",confidence:1,weight:60,at:new Date(),metadata:{}});

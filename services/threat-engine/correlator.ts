@@ -39,6 +39,7 @@ export class ThreatCorrelator {
   async dismiss(nodeId:string,dismissedBy:string){
     const count=await this.store.clear(nodeId);
     await this.dismissals?.record(nodeId,dismissedBy,count);
+    await this.engine.resolveIncidents(nodeId,dismissedBy);
     return {clearedSignals:count};
   }
 

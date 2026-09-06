@@ -14,6 +14,8 @@ export interface ThreatActionPort {
 export interface IncidentPort {
   open(input:{id:string;nodeId?:string;severity:ThreatSeverity;score:number;signals:ThreatSignal[]}):Promise<void>;
   event(input:{severity:ThreatSeverity;type:string;description:string;metadata:Record<string,unknown>}):Promise<void>;
+  // Closes every still-OPEN incident for a node — see ThreatEngine.resolveIncidents.
+  close(nodeId:string,closedBy:string):Promise<number>;
 }
 export class ThreatEngine {
   constructor(private actions:ThreatActionPort,private incidents:IncidentPort){}
@@ -42,6 +44,14 @@ export class ThreatEngine {
       metadata:{score,signalCount:signals.length,nodeId:nodeId??null}
     });
     return {score,severity,contained:Boolean(nodeId&&score>=65)};
+  }
+  // incidents.status/closed_at (db/002_operational_tables.sql) had no write
+  // path beyond the initial OPEN insert — every incident this engine ever
+  // opened stayed OPEN forever, even once an operator confirmed it handled.
+  // ThreatCorrelator.dismiss calls this so dismissing a node's accumulated
+  // signals also closes out whatever incident(s) they produced.
+  async resolveIncidents(nodeId:string,closedBy:string){
+    return this.incidents.close(nodeId,closedBy);
   }
   async restore(nodeId:string,approvedBy:string,forensicClearance:boolean){
     if(!forensicClearance)throw new Error("forensic clearance required before restore");

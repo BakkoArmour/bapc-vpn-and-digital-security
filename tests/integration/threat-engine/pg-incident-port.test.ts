@@ -36,3 +36,34 @@ test("event appends a real SecurityEvent through EventRepository",async()=>{
   assert.equal(store.events[0]!.type,"THREAT_EVALUATED");
   assert.equal(store.events[0]!.engine,"threat-correlator");
 });
+
+// incidents.status/closed_at had no write path at all before this — every
+// incident opened by ThreatEngine.evaluate stayed OPEN/closed_at=NULL
+// forever, with no way for an operator to ever resolve one.
+class FakeDbWithRows {
+  queries:Array<{text:string;values:unknown[]}>=[];
+  rows:any[];
+  constructor(rows:any[]){this.rows=rows;}
+  async query(text:string,values:unknown[]=[]){this.queries.push({text,values});return {rows:this.rows};}
+}
+
+test("close resolves every OPEN incident for a node and logs a resolution event",async()=>{
+  const db=new FakeDbWithRows([{incident_id:"inc-1"},{incident_id:"inc-2"}]);
+  const store=new MemoryStore();
+  const port=new PgIncidentPort(db,store,new RandomIds(),new SystemClock());
+  const count=await port.close("n1","security-analyst-1");
+  assert.equal(count,2);
+  assert.match(db.queries[0]!.text,/UPDATE bapc_security_core\.incidents SET status='RESOLVED'/);
+  assert.deepEqual(db.queries[0]!.values.slice(0,1),["n1"]);
+  assert.equal(store.events.length,1);
+  assert.equal(store.events[0]!.type,"INCIDENT_RESOLVED");
+});
+
+test("close is a no-op with no event logged when there was nothing OPEN to resolve",async()=>{
+  const db=new FakeDbWithRows([]);
+  const store=new MemoryStore();
+  const port=new PgIncidentPort(db,store,new RandomIds(),new SystemClock());
+  const count=await port.close("n1","security-analyst-1");
+  assert.equal(count,0);
+  assert.equal(store.events.length,0);
+});

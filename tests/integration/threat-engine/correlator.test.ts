@@ -4,14 +4,14 @@ import {ThreatEngine} from "../../../services/threat-engine/engine.js";
 import {ThreatCorrelator} from "../../../services/threat-engine/correlator.js";
 import {InMemoryThreatSignalStore} from "../../../services/threat-engine/threat-signal-store.js";
 
-const buildEngine=(actions:string[])=>new ThreatEngine({
+const buildEngine=(actions:string[],closed?:Array<{nodeId:string;closedBy:string}>)=>new ThreatEngine({
   reauthenticate:async()=>{actions.push("reauth");},
   terminateJit:async()=>{actions.push("jit");},
   isolate:async()=>{actions.push("isolate");},
   revokeNodeCertificates:async()=>{actions.push("revoke");},
   rotateMeshIdentity:async()=>{actions.push("rotate");},
   restore:async()=>{actions.push("restore");}
-},{open:async()=>{},event:async()=>{}});
+},{open:async()=>{},event:async()=>{},close:async(nodeId,closedBy)=>{closed?.push({nodeId,closedBy});return closed?.length??0;}});
 
 test("five weak repeated-failed-auth signals correlate into a CRITICAL evaluation",async()=>{
   const actions:string[]=[];
@@ -39,7 +39,8 @@ test("signals outside the correlation window do not accumulate",async()=>{
 
 test("dismiss clears the window and records the dismissal",async()=>{
   const dismissed:Array<{nodeId:string;dismissedBy:string;signalCount:number}>=[];
-  const correlator=new ThreatCorrelator(buildEngine([]),300_000,{
+  const closed:Array<{nodeId:string;closedBy:string}>=[];
+  const correlator=new ThreatCorrelator(buildEngine([],closed),300_000,{
     async record(nodeId,dismissedBy,signalCount){dismissed.push({nodeId,dismissedBy,signalCount});}
   });
   await correlator.ingest({nodeId:"n1",kind:"scan",confidence:1,weight:20,at:new Date(),metadata:{}});
@@ -49,6 +50,17 @@ test("dismiss clears the window and records the dismissal",async()=>{
   assert.equal(outcome.clearedSignals,2);
   assert.equal(await correlator.activeSignalCount("n1"),0);
   assert.deepEqual(dismissed,[{nodeId:"n1",dismissedBy:"security-analyst-1",signalCount:2}]);
+});
+
+// incidents.status/closed_at had no write path at all before this — dismiss
+// cleared the signal window but the incidents ThreatEngine.evaluate had
+// already opened for this node stayed OPEN forever.
+test("dismiss also resolves any open incidents ThreatEngine opened for that node",async()=>{
+  const closed:Array<{nodeId:string;closedBy:string}>=[];
+  const correlator=new ThreatCorrelator(buildEngine([],closed));
+  await correlator.ingest({nodeId:"n1",kind:"scan",confidence:1,weight:20,at:new Date(),metadata:{}});
+  await correlator.dismiss("n1","security-analyst-1");
+  assert.deepEqual(closed,[{nodeId:"n1",closedBy:"security-analyst-1"}]);
 });
 
 test("different nodes have independent correlation windows",async()=>{
