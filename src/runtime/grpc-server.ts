@@ -5,7 +5,7 @@ import {Postgres} from "../infrastructure/postgres/client.js";
 import {PgRepositories} from "../infrastructure/postgres/repositories.js";
 import {TransactionalOutbox} from "../infrastructure/postgres/outbox.js";
 import {RandomIds, SystemClock} from "../infrastructure/memory.js";
-import {AllowAttestation} from "../infrastructure/adapters.js";
+import {buildAttestationVerifier} from "../infrastructure/attestation/attestation-verifier.js";
 import {EnrollmentService} from "../application/enrollment.js";
 import {MeshController} from "../../services/mesh-controller/controller.js";
 import {buildMeshGrpcServer} from "../api/grpc/server.js";
@@ -29,10 +29,14 @@ void new TransactionalOutbox(db); // reserved for future signed enrollment event
 // Real X.509 issuance for node enrollment — shares the same AWS KMS key or
 // Postgres-persisted ephemeral CA that production-server.ts's CRL/threat-
 // response paths use (see trust-anchor.ts), so certificates issued here
-// chain-verify against that CRL and against each other. AllowAttestation
-// remains development-only: production deployments still need real
-// hardware attestation.
+// chain-verify against that CRL and against each other.
 const trustAnchor=await loadTrustAnchor(db);
+// buildAttestationVerifier/loadConfig refuse to produce the allow-all
+// DevelopmentAttestationProvider when NODE_ENV=production — see
+// src/infrastructure/attestation/ for the real Windows TPM/Linux TPM2
+// providers this selects between, and providers.ts for exactly what each
+// one does and doesn't verify without live hardware.
+const attestationVerifier=buildAttestationVerifier(config.attestationProvider,config.environment);
 const certificateIssuer=new TrustCoreCertificateIssuer(new TrustCoreIssuer(
   trustAnchor.keys,new PgCertificateStore(db),new ForgeX509Builder(),
   {id:trustAnchor.issuerId,certificatePem:trustAnchor.certificatePem,keyReference:trustAnchor.keyReference,algorithm:trustAnchor.algorithm}
@@ -54,7 +58,7 @@ const meshController=new MeshController(new PgMeshCommandSink(commandQueue),new 
 // through, so a newly-enrolled peer reaches everyone the same way a
 // rotation does.
 const enrollment=new EnrollmentService(
-  repo,repo,repo,new AllowAttestation(),certificateIssuer,
+  repo,repo,repo,attestationVerifier,certificateIssuer,
   new MeshControllerPeerDistributor(meshController),new RandomIds(),new SystemClock()
 );
 

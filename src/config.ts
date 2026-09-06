@@ -1,5 +1,7 @@
+export type AttestationProviderName="development"|"windows-tpm"|"linux-tpm2"|"apple-secure-enclave";
 export interface SecurityConfig {
   environment:"development"|"test"|"production";
+  attestationProvider:AttestationProviderName;
   databaseUrl:string;
   certificateTtlMinutes:number;
   keyRotationDays:number;
@@ -34,6 +36,8 @@ const ecosystemSecret=(v:string|undefined,name:string,production:boolean)=>{
     throw new Error(`production ${name} shared secret must be set and at least 32 characters`);
   return v||`development-${name}-secret-change-me`;
 };
+const ATTESTATION_PROVIDERS=["development","windows-tpm","linux-tpm2","apple-secure-enclave"] as const;
+
 export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
   const environment=(env.NODE_ENV as SecurityConfig["environment"])??"development";
   const secret=env.CONTROL_API_TOKEN_SECRET??"";
@@ -42,8 +46,21 @@ export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
   if(environment==="production"&&(secret.length<32||eventSecret.length<32||oobSecret.length<32))
     throw new Error("production control/event signing/OOB shared secrets must be at least 32 characters");
   const production=environment==="production";
+  const attestationProviderEnv=env.ATTESTATION_PROVIDER;
+  if(attestationProviderEnv!==undefined&&!(ATTESTATION_PROVIDERS as readonly string[]).includes(attestationProviderEnv))
+    throw new Error(`ATTESTATION_PROVIDER must be one of ${ATTESTATION_PROVIDERS.join(", ")}`);
+  const attestationProvider=(attestationProviderEnv as AttestationProviderName)??"development";
+  // The one allow-all path (DevelopmentAttestationProvider) must never be
+  // reachable in production, whether that's because nobody set
+  // ATTESTATION_PROVIDER (defaulting to "development") or because someone
+  // explicitly set it to "development" anyway — this is enforced here, at
+  // startup, rather than only inside the verifier itself, so a
+  // misconfigured production deployment refuses to even start instead of
+  // silently accepting every enrollment.
+  if(production&&attestationProvider==="development")
+    throw new Error("ATTESTATION_PROVIDER=development (or unset) cannot be used when NODE_ENV=production — set it to windows-tpm, linux-tpm2, or apple-secure-enclave");
   return {
-    environment,
+    environment,attestationProvider,
     databaseUrl:env.DATABASE_URL??"postgres://localhost/bapc_security_core",
     certificateTtlMinutes:int(env.CERTIFICATE_TTL_MINUTES,1440),
     keyRotationDays:int(env.KEY_ROTATION_DAYS,30),

@@ -4,7 +4,8 @@ import {MeshControllerPeerDistributor} from "../../../services/mesh-controller/m
 import {MeshController} from "../../../services/mesh-controller/controller.js";
 import {EnrollmentService} from "../../../src/application/enrollment.js";
 import {MemoryStore, RandomIds, SystemClock} from "../../../src/infrastructure/memory.js";
-import {AllowAttestation, DevelopmentCertificateIssuer} from "../../../src/infrastructure/adapters.js";
+import {DevelopmentCertificateIssuer} from "../../../src/infrastructure/adapters.js";
+import {DevelopmentAttestationProvider} from "../../../src/infrastructure/attestation/providers.js";
 import type {MeshNode} from "../../../src/domain/types.js";
 
 // NoopPeerDistributor meant an already-active node never learned about a
@@ -72,7 +73,7 @@ test("a second node enrolling notifies the first node via MeshController.reconci
     sever:async()=>{}
   });
   const enrollment=new EnrollmentService(
-    store,store,store,new AllowAttestation(),new DevelopmentCertificateIssuer(),
+    store,store,store,new DevelopmentAttestationProvider(),new DevelopmentCertificateIssuer(),
     new MeshControllerPeerDistributor(controller),new RandomIds(),new SystemClock()
   );
 

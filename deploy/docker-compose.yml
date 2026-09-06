@@ -12,6 +12,17 @@ x-control-env: &control-env
   HEADQUARTERS_SHARED_SECRET: ${HEADQUARTERS_SHARED_SECRET:-development-headquarters-secret-change-me}
   CLOUD_DEPLOYMENT_SHARED_SECRET: ${CLOUD_DEPLOYMENT_SHARED_SECRET:-development-cloud-deployment-secret-change-me}
   INTEGRATION_SHARED_SECRET: ${INTEGRATION_SHARED_SECRET:-development-integration-secret-change-me}
+  # loadConfig (src/config.ts) refuses to start ANY service with
+  # NODE_ENV=production (which this compose file sets unconditionally)
+  # unless ATTESTATION_PROVIDER is explicitly windows-tpm, linux-tpm2, or
+  # apple-secure-enclave — "development" (the allow-all mock,
+  # src/infrastructure/attestation/providers.ts) throws even if explicitly
+  # requested, by design: there is no NODE_ENV-based mock escape hatch for
+  # production. This compose file has no real TPM/Secure Enclave hardware
+  # behind it, so real enrollment quotes will correctly fail closed here —
+  # see deploy/.env for which real provider this deployment is configured
+  # to expect evidence from.
+  ATTESTATION_PROVIDER: ${ATTESTATION_PROVIDER:?set ATTESTATION_PROVIDER to windows-tpm, linux-tpm2, or apple-secure-enclave}
 
 # Three networks. An earlier version of this file used two (control/egress)
 # on the theory that `internal: true` meant "no outbound internet" — but

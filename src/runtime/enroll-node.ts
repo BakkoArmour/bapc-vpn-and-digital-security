@@ -46,11 +46,17 @@ const generateIdentityCsr=(commonName:string)=>{
 
 export const WIREGUARD_LISTEN_PORT=51820;
 
-// hardwareAttestationQuote is sent empty: the only verifier wired anywhere
-// in this control plane is AllowAttestation (src/infrastructure/adapters.ts,
-// documented there as development-only) — real hardware attestation (a
-// signed TPM/Secure Enclave quote) is a separate, already-documented gap
-// this doesn't attempt to fake.
+// hardwareAttestationQuote is sent empty: the control plane's verification
+// side is real (see src/infrastructure/attestation/ — Windows TPM/Linux
+// TPM2 providers do genuine signature verification of a real attestation
+// envelope, gated by ATTESTATION_PROVIDER, and refuse to fall back to an
+// allow-all verifier in production), but nothing on THIS side yet calls a
+// real TPM/Secure Enclave API to produce a genuine signed quote — that
+// requires native platform code this Node/TypeScript process can't provide
+// on its own (see native/linux/adapter.ts, native/windows/adapter.ts for
+// the equivalent split between what's implemented here and what needs a
+// native helper). A production ATTESTATION_PROVIDER will correctly refuse
+// this empty quote rather than silently accepting it.
 export async function enrollNode(
   client:EnrollmentGrpcClient,platform:PlatformAdapter,
   opts:{hardwareUuid:string;osSignature:string}

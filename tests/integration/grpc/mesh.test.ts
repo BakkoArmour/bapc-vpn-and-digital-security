@@ -8,7 +8,8 @@ import {dirname, join} from "node:path";
 import {randomUUID, sign as cryptoSign} from "node:crypto";
 import {EnrollmentService} from "../../../src/application/enrollment.js";
 import {MemoryStore, RandomIds, SystemClock} from "../../../src/infrastructure/memory.js";
-import {AllowAttestation, DevelopmentCertificateIssuer, NoopPeerDistributor} from "../../../src/infrastructure/adapters.js";
+import {DevelopmentCertificateIssuer, NoopPeerDistributor} from "../../../src/infrastructure/adapters.js";
+import {DevelopmentAttestationProvider} from "../../../src/infrastructure/attestation/providers.js";
 import {MeshController} from "../../../services/mesh-controller/controller.js";
 import {buildMeshGrpcServer, InMemoryCommandQueue, InMemoryKeyRotationLedger, LoggingMeshCommandSink} from "../../../src/api/grpc/server.js";
 import {loadTrustAnchor} from "../../../services/trust-core/trust-anchor.js";
@@ -35,7 +36,7 @@ const generateCsrDer=(commonName:string):Buffer=>{
 const startServer=async()=>{
   const store=new MemoryStore();
   const enrollment=new EnrollmentService(
-    store,store,store,new AllowAttestation(),new DevelopmentCertificateIssuer(),
+    store,store,store,new DevelopmentAttestationProvider(),new DevelopmentCertificateIssuer(),
     new NoopPeerDistributor(),new RandomIds(),new SystemClock()
   );
   const commands=new InMemoryCommandQueue();
@@ -113,7 +114,7 @@ test("gRPC registerNode with the real TrustCoreIssuer issues a certificate bindi
   ));
   const store=new MemoryStore();
   const enrollment=new EnrollmentService(
-    store,store,store,new AllowAttestation(),certificateIssuer,
+    store,store,store,new DevelopmentAttestationProvider(),certificateIssuer,
     new NoopPeerDistributor(),new RandomIds(),new SystemClock()
   );
   const server=buildMeshGrpcServer({

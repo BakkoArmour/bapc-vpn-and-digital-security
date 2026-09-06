@@ -1,5 +1,8 @@
 import type { MeshNode, NetworkPolicy, SecurityEvent } from "../domain/types.js";
-export class AllowAttestation {async verify(){return true;}}
+// AllowAttestation moved to src/infrastructure/attestation/providers.ts as
+// DevelopmentAttestationProvider, alongside the real Windows TPM/Linux TPM2/
+// Apple Secure Enclave providers it now has to be explicitly (and
+// production-refused) selected from — see AttestationVerifierFactory there.
 export class DevelopmentCertificateIssuer {async issueNodeCertificate(nodeId:string,_publicKey:string,ttlMinutes:number){return {serial:`dev-${nodeId}`,certificatePem:"DEVELOPMENT-ONLY",expiresAt:new Date(Date.now()+ttlMinutes*60_000)}}async revoke(){} }
 export class NoopPeerDistributor {async configure(_node:MeshNode,_peers:MeshNode[]){}async remove(_nodeId:string){} }
 // Dev-only scaffold, superseded by PgPolicyEnforcer in production — kept

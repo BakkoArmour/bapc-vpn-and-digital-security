@@ -3,6 +3,13 @@ export interface Clock { now():Date; }
 export interface IdGenerator { next():UUID; }
 export interface Hasher { digest(value:string):Promise<string>; }
 export interface CertificateIssuer { issueNodeCertificate(nodeId:UUID, publicKey:string, ttlMinutes:number):Promise<{serial:string;certificatePem:string;expiresAt:Date}>; revoke(serial:string,reason:string):Promise<void>; }
+// publicKey (EnrollmentService's attestationPublicKey — the CSR-verified
+// X.509 identity key) is folded into what a real provider verifies a
+// signature over, binding the hardware evidence to this specific enrollment's
+// identity key — see src/infrastructure/attestation/ for the real
+// implementations (Windows TPM, Linux TPM2, Apple Secure Enclave interface,
+// and an explicit development/mock provider that AttestationVerifierFactory
+// refuses to hand out in production).
 export interface AttestationVerifier { verify(hardwareId:string,quote:Uint8Array,publicKey?:string):Promise<boolean>; }
 // stage() reports which nodes it actually targeted (the active-node list at
 // staging time) so SafeApplyService can verify each of them individually

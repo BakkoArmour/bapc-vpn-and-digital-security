@@ -11,7 +11,8 @@ import type {CommandRunner} from "../../../native/shared/command-runner.js";
 import type {PlatformAdapter} from "../../../native/shared/platform-adapter.js";
 import {EnrollmentService} from "../../../src/application/enrollment.js";
 import {MemoryStore, RandomIds, SystemClock} from "../../../src/infrastructure/memory.js";
-import {AllowAttestation, DevelopmentCertificateIssuer, NoopPeerDistributor} from "../../../src/infrastructure/adapters.js";
+import {DevelopmentCertificateIssuer, NoopPeerDistributor} from "../../../src/infrastructure/adapters.js";
+import {DevelopmentAttestationProvider} from "../../../src/infrastructure/attestation/providers.js";
 import {MeshController} from "../../../services/mesh-controller/controller.js";
 import {buildMeshGrpcServer, InMemoryCommandQueue, InMemoryKeyRotationLedger, LoggingMeshCommandSink} from "../../../src/api/grpc/server.js";
 
@@ -114,7 +115,7 @@ test("enrollNode throws clearly if the control plane doesn't return a node_id (o
 test("enrollNode against a real mesh-grpc server returns a real node_id and applies the config locally",async()=>{
   const store=new MemoryStore();
   const enrollment=new EnrollmentService(
-    store,store,store,new AllowAttestation(),new DevelopmentCertificateIssuer(),
+    store,store,store,new DevelopmentAttestationProvider(),new DevelopmentCertificateIssuer(),
     new NoopPeerDistributor(),new RandomIds(),new SystemClock()
   );
   const server=buildMeshGrpcServer({

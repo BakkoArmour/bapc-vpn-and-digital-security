@@ -45,8 +45,30 @@ test("production accepts a config with all three secrets long enough",()=>{
     DIAGNOSTICS_SHARED_SECRET:"a".repeat(32),
     HEADQUARTERS_SHARED_SECRET:"b".repeat(32),
     CLOUD_DEPLOYMENT_SHARED_SECRET:"c".repeat(32),
-    INTEGRATION_SHARED_SECRET:"d".repeat(32)
+    INTEGRATION_SHARED_SECRET:"d".repeat(32),
+    ATTESTATION_PROVIDER:"windows-tpm"
   });
   assert.equal(config.oobSharedSecret,"z".repeat(32));
   assert.equal(config.oobControllerUrl,"http://oob-controller:8181");
+});
+
+// The allow-all DevelopmentAttestationProvider must never be reachable in
+// production, whether that's an explicit "development" or (its default)
+// simply never setting ATTESTATION_PROVIDER at all.
+test("production rejects ATTESTATION_PROVIDER=development, and rejects it being left unset entirely",()=>{
+  const base={
+    NODE_ENV:"production",CONTROL_API_TOKEN_SECRET:"x".repeat(32),
+    EVENT_SIGNING_SECRET:"y".repeat(32),OOB_SHARED_SECRET:"z".repeat(32)
+  };
+  assert.throws(()=>loadConfig({...base,ATTESTATION_PROVIDER:"development"}),/ATTESTATION_PROVIDER=development.*cannot be used when NODE_ENV=production/);
+  assert.throws(()=>loadConfig(base),/ATTESTATION_PROVIDER=development.*cannot be used when NODE_ENV=production/);
+});
+
+test("rejects an unrecognized ATTESTATION_PROVIDER value",()=>{
+  assert.throws(()=>loadConfig({ATTESTATION_PROVIDER:"a-tpm-i-made-up"}),/ATTESTATION_PROVIDER must be one of/);
+});
+
+test("defaults attestationProvider to development outside production",()=>{
+  assert.equal(loadConfig({}).attestationProvider,"development");
+  assert.equal(loadConfig({NODE_ENV:"test"}).attestationProvider,"development");
 });
