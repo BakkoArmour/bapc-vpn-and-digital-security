@@ -5,7 +5,7 @@ import * as protoLoader from "@grpc/proto-loader";
 import forge from "node-forge";
 import {fileURLToPath} from "node:url";
 import {dirname, join} from "node:path";
-import {randomUUID} from "node:crypto";
+import {randomUUID, sign as cryptoSign} from "node:crypto";
 import {EnrollmentService} from "../../../src/application/enrollment.js";
 import {MemoryStore, RandomIds, SystemClock} from "../../../src/infrastructure/memory.js";
 import {AllowAttestation, DevelopmentCertificateIssuer, NoopPeerDistributor} from "../../../src/infrastructure/adapters.js";
@@ -52,7 +52,7 @@ const startServer=async()=>{
   const client=new proto.bapc.security.v1.MeshOrchestrationService(
     `127.0.0.1:${port}`,grpc.credentials.createInsecure()
   );
-  return {server,client,port};
+  return {server,client,port,store};
 };
 
 test("gRPC registerNode enrolls a node and returns peers",async()=>{
@@ -183,6 +183,43 @@ test("gRPC rotatePeerKey rejects an unsigned rotation",async()=>{
       client.rotatePeerKey({nodeId:"does-not-exist",newPublicKey:"pubkey-3",signature:Buffer.alloc(0)},
         (error:Error|null,res:unknown)=>error?reject(error):resolve(res));
     }));
+  }finally{
+    server.forceShutdown();
+  }
+});
+
+test("gRPC rotatePeerKey accepts a rotation signed by the node's enrolled identity key",async()=>{
+  const {server,client,store}=await startServer();
+  try{
+    const nodeKeys=forge.pki.rsa.generateKeyPair(2048);
+    const csr=forge.pki.createCertificationRequest();
+    csr.publicKey=nodeKeys.publicKey;
+    csr.setSubject([{name:"commonName",value:"node-rotation-ok"}]);
+    csr.sign(nodeKeys.privateKey,forge.md.sha256.create());
+    const csrDer=Buffer.from(forge.asn1.toDer(forge.pki.certificationRequestToAsn1(csr)).getBytes(),"binary");
+
+    await new Promise((resolve,reject)=>{
+      client.registerNode({
+        hardwareUuid:"hw-rotation-ok",wireguardPublicKey:"pubkey-rotation-ok",
+        hardwareAttestationQuote:Buffer.from("quote"),osSignature:"linux-6.8",csrDer
+      },(error:Error|null,res:unknown)=>error?reject(error):resolve(res));
+    });
+    const node=await store.findByPublicKey("pubkey-rotation-ok");
+    assert.ok(node);
+
+    const newPublicKey="pubkey-rotation-new";
+    const privateKeyPem=forge.pki.privateKeyToPem(nodeKeys.privateKey);
+    const signature=cryptoSign("RSA-SHA256",Buffer.from(`${node!.id}:${newPublicKey}`),privateKeyPem);
+
+    const response:any=await new Promise((resolve,reject)=>{
+      client.rotatePeerKey({nodeId:node!.id,newPublicKey,signature},
+        (error:Error|null,res:unknown)=>error?reject(error):resolve(res));
+    });
+    assert.equal(response.acknowledged,true);
+    assert.equal(Number(response.effectiveEpoch),1);
+
+    const updated=await store.get(node!.id);
+    assert.equal(updated!.wireGuardPublicKey,newPublicKey);
   }finally{
     server.forceShutdown();
   }
