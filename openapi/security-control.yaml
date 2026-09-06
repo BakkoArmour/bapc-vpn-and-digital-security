@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: BAPC VPN & Digital Security Control API
-  version: 0.3.0
+  version: 0.4.0
 servers:
   - url: https://security-control.internal
 security:
@@ -20,8 +20,39 @@ paths:
     get:
       responses:
         "200": {description: Active mesh nodes}
+  /api/v1/policies:
+    get:
+      responses:
+        "200": {description: Active network policies}
+  /api/v1/policies/{id}:
+    put:
+      description: Idempotent — send the same Idempotency-Key header to safely retry.
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+        - {in: header, name: Idempotency-Key, required: false, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        "200": {description: Policy created or replaced}
+        "409": {description: Idempotency key reused with a different request body}
+  /api/v1/events:
+    get:
+      parameters:
+        - {in: query, name: limit, required: false, schema: {type: integer, default: 100, maximum: 500}}
+      responses:
+        "200": {description: Recent security events}
+  /api/v1/soc/snapshot:
+    get:
+      responses:
+        "200": {description: SOC counts, active nodes and recent events}
   /api/v1/jit:
     post:
+      description: Idempotent — send the same Idempotency-Key header to safely retry.
+      parameters:
+        - {in: header, name: Idempotency-Key, required: false, schema: {type: string}}
       requestBody:
         required: true
         content:
@@ -36,6 +67,7 @@ paths:
                 justification: {type: string, minLength: 12}
       responses:
         "200": {description: JIT request created}
+        "429": {description: Rate limit exceeded (20 requests/minute per identity)}
   /api/v1/jit/{id}/approve:
     post:
       parameters:
@@ -48,6 +80,32 @@ paths:
         - {in: path, name: id, required: true, schema: {type: string}}
       responses:
         "200": {description: JIT request terminated}
+  /api/v1/nodes/{id}/quarantine:
+    post:
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {reason: {type: string}}
+      responses:
+        "200": {description: Node quarantined}
+        "429": {description: Rate limit exceeded (10 requests/minute per identity)}
+  /api/v1/nodes/{id}/restore:
+    post:
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clearanceToken]
+              properties: {clearanceToken: {type: string}}
+      responses:
+        "200": {description: Node restored after verified forensic clearance}
 components:
   securitySchemes:
     bearerAuth:

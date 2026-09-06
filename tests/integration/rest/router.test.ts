@@ -1,0 +1,106 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {createServer} from "node:http";
+import {createHmac} from "node:crypto";
+import {request} from "node:http";
+import {AddressInfo} from "node:net";
+import {HmacBearerGuard} from "../../../src/api/rest/guard.js";
+import {RestRouter} from "../../../src/api/rest/router.js";
+import {MemoryIdempotencyStore} from "../../../src/api/rest/idempotency.js";
+
+const SECRET="test-secret-that-is-at-least-32-chars-long";
+
+const token=(roles:string[],sub="tester")=>{
+  const encoded=Buffer.from(JSON.stringify({sub,roles,exp:Math.floor(Date.now()/1000)+60})).toString("base64url");
+  const sig=createHmac("sha256",SECRET).update(encoded).digest("base64url");
+  return `${encoded}.${sig}`;
+};
+
+const startServer=()=>{
+  const router=new RestRouter(new HmacBearerGuard(SECRET),new MemoryIdempotencyStore());
+  let calls=0;
+  router.add("GET","/api/v1/status",[],async()=>({ok:true}));
+  router.add("GET","/api/v1/secure",["security-read"],async()=>({secured:true}));
+  router.add("POST","/api/v1/create",["security-user"],async({body})=>{calls++;return {calls,body};},{idempotent:true});
+  router.add("POST","/api/v1/limited",["security-user"],async()=>({calls:++calls}),{rateLimit:{limit:2,windowMs:60_000}});
+  const server=createServer((req,res)=>void router.handle(req,res));
+  return new Promise<{server:import("node:http").Server;port:number}>(resolve=>{
+    server.listen(0,"127.0.0.1",()=>resolve({server,port:(server.address() as AddressInfo).port}));
+  });
+};
+
+const call=(port:number,method:string,path:string,opts:{token?:string;body?:unknown;idempotencyKey?:string}={})=>
+  new Promise<{status:number;json:any}>((resolve,reject)=>{
+    const payload=opts.body!==undefined?JSON.stringify(opts.body):undefined;
+    const req=request({
+      host:"127.0.0.1",port,path,method,
+      headers:{
+        ...(opts.token?{authorization:`Bearer ${opts.token}`}:{}),
+        ...(payload?{"content-type":"application/json","content-length":Buffer.byteLength(payload)}:{}),
+        ...(opts.idempotencyKey?{"idempotency-key":opts.idempotencyKey}:{})
+      }
+    },res=>{
+      const chunks:Buffer[]=[];
+      res.on("data",c=>chunks.push(c));
+      res.on("end",()=>resolve({status:res.statusCode!,json:JSON.parse(Buffer.concat(chunks).toString("utf8"))}));
+    });
+    req.on("error",reject);
+    if(payload)req.write(payload);
+    req.end();
+  });
+
+test("unauthenticated requests to protected routes are rejected",async()=>{
+  const {server,port}=await startServer();
+  try{
+    const res=await call(port,"GET","/api/v1/secure");
+    assert.equal(res.status,401);
+  }finally{server.close();}
+});
+
+test("role-gated route accepts a token with the required role",async()=>{
+  const {server,port}=await startServer();
+  try{
+    const res=await call(port,"GET","/api/v1/secure",{token:token(["security-read"])});
+    assert.equal(res.status,200);
+    assert.equal(res.json.data.secured,true);
+  }finally{server.close();}
+});
+
+test("a token missing the required role is forbidden",async()=>{
+  const {server,port}=await startServer();
+  try{
+    const res=await call(port,"GET","/api/v1/secure",{token:token(["security-user"])});
+    assert.equal(res.status,403);
+  }finally{server.close();}
+});
+
+test("idempotency key replays the first response for a repeated request",async()=>{
+  const {server,port}=await startServer();
+  try{
+    const t=token(["security-user"]);
+    const first=await call(port,"POST","/api/v1/create",{token:t,body:{x:1},idempotencyKey:"key-1"});
+    const second=await call(port,"POST","/api/v1/create",{token:t,body:{x:1},idempotencyKey:"key-1"});
+    assert.equal(first.json.data.calls,second.json.data.calls);
+  }finally{server.close();}
+});
+
+test("idempotency key reused with a different body is a conflict",async()=>{
+  const {server,port}=await startServer();
+  try{
+    const t=token(["security-user"]);
+    await call(port,"POST","/api/v1/create",{token:t,body:{x:1},idempotencyKey:"key-2"});
+    const conflict=await call(port,"POST","/api/v1/create",{token:t,body:{x:2},idempotencyKey:"key-2"});
+    assert.equal(conflict.status,409);
+  }finally{server.close();}
+});
+
+test("rate limit trips after the configured number of requests",async()=>{
+  const {server,port}=await startServer();
+  try{
+    const t=token(["security-user"]);
+    await call(port,"POST","/api/v1/limited",{token:t});
+    await call(port,"POST","/api/v1/limited",{token:t});
+    const third=await call(port,"POST","/api/v1/limited",{token:t});
+    assert.equal(third.status,429);
+  }finally{server.close();}
+});

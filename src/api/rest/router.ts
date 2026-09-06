@@ -2,33 +2,57 @@ import type {IncomingMessage,ServerResponse} from "node:http";
 import {randomUUID} from "node:crypto";
 import {asHttpError,HttpError} from "./errors.js";
 import {HmacBearerGuard} from "./guard.js";
+import {MemoryRateLimiter, type RateLimitRule} from "./rate-limit.js";
+import {withIdempotency, MemoryIdempotencyStore, type IdempotencyStore} from "./idempotency.js";
 
 export type JsonHandler=(ctx:{
-  request:IncomingMessage; claims:{sub:string;roles:string[]}; body:any; params:Record<string,string>;
+  request:IncomingMessage; claims:{sub:string;roles:string[]}; body:any;
+  params:Record<string,string>; query:URLSearchParams;
 })=>Promise<unknown>;
-interface Route {method:string;pattern:RegExp;keys:string[];roles:string[];handler:JsonHandler;}
+export interface RouteOptions {idempotent?:boolean; rateLimit?:RateLimitRule;}
+interface Route {method:string;pattern:RegExp;keys:string[];roles:string[];handler:JsonHandler;options:RouteOptions;}
+
+const DEFAULT_RATE_LIMIT:RateLimitRule={limit:60,windowMs:60_000};
 
 export class RestRouter {
   private routes:Route[]=[];
-  constructor(private guard:HmacBearerGuard){}
-  add(method:string,path:string,roles:string[],handler:JsonHandler){
+  private limiter=new MemoryRateLimiter();
+  private idempotencyStore:IdempotencyStore;
+  constructor(private guard:HmacBearerGuard, idempotencyStore?:IdempotencyStore){
+    this.idempotencyStore=idempotencyStore??new MemoryIdempotencyStore();
+  }
+  add(method:string,path:string,roles:string[],handler:JsonHandler,options:RouteOptions={}){
     const keys:string[]=[];
     const pattern=new RegExp("^"+path.replace(/:[^/]+/g,m=>{keys.push(m.slice(1));return "([^/]+)";})+"$");
-    this.routes.push({method,pattern,keys,roles,handler});
+    this.routes.push({method,pattern,keys,roles,handler,options});
   }
   async handle(req:IncomingMessage,res:ServerResponse){
     const requestId=randomUUID();
     try{
       if(req.url==="/healthz"){this.respond(res,200,{status:"ok",requestId});return;}
-      const path=(req.url??"/").split("?")[0]!;
+      const [path,rawQuery]=(req.url??"/").split("?") as [string,string|undefined];
+      const query=new URLSearchParams(rawQuery??"");
       const route=this.routes.find(r=>r.method===req.method&&r.pattern.test(path));
       if(!route)throw new HttpError(404,"route not found","not_found");
       const match=path.match(route.pattern)!;
       const params=Object.fromEntries(route.keys.map((k,i)=>[k,decodeURIComponent(match[i+1]??"")]));
       const claims=this.guard.verify(req,route.roles);
+
+      const rule=route.options.rateLimit??DEFAULT_RATE_LIMIT;
+      const rateResult=this.limiter.check(`${claims.sub}:${route.method}:${path}`,rule);
+      if(!rateResult.allowed){
+        res.setHeader("Retry-After",String(Math.ceil((rateResult.resetAt-Date.now())/1000)));
+        throw new HttpError(429,"rate limit exceeded","rate_limited");
+      }
+
       const body=await this.readJson(req);
-      const value=await route.handler({request:req,claims,body,params});
-      this.respond(res,200,{requestId,data:value});
+      const run=()=>route.handler({request:req,claims,body,params,query}).then(data=>({status:200,body:{requestId,data}}));
+      const idempotencyKey=route.options.idempotent
+        ? (req.headers["idempotency-key"] as string|undefined) : undefined;
+      const result=route.options.idempotent
+        ? await withIdempotency(this.idempotencyStore,idempotencyKey,claims.sub,body,86_400_000,run)
+        : await run();
+      this.respond(res,result.status,result.body);
     }catch(error){
       const e=asHttpError(error);
       this.respond(res,e.status,{requestId,error:{code:e.code,message:e.message}});
