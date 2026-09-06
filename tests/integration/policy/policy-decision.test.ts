@@ -69,6 +69,7 @@ test("allows when a matching ALLOW policy exists and every prior check passes",a
   const {decision,signature}=await pd.decide(identity(),goodDevice(),node(),resource());
   assert.equal(decision.allowed,true);
   assert.equal(decision.reason,"policy dev-to-prod-app");
+
   const signer=new HmacDecisionSigner(SECRET);
   assert.equal(await signer.verify(decision,signature),true);
 });
@@ -158,4 +159,25 @@ test("a required role missing from the identity causes the policy to be skipped"
   const {decision}=await pd.decide(identity({roles:["engineer"]}),goodDevice(),node(),resource());
   assert.equal(decision.allowed,false);
   assert.equal(decision.reason,"default deny");
+});
+
+// AUTH_REFRESH_MS (config.ts) had no consumer at all — every access
+// decision got a hard-coded 30-second expiry regardless of what an
+// operator configured.
+test("decision.expiresAt uses the configured authorizationRefreshMs, not a hard-coded 30 seconds",async()=>{
+  const store=new MemoryStore();
+  const now=new Date("2026-01-01T00:00:00.000Z");
+  const clock={now:()=>now};
+  const pd=new PolicyDecisionService(store,store,new RandomIds(),clock,new HmacDecisionSigner(SECRET),120_000);
+  const {decision}=await pd.decide(identity({mfa:false}),goodDevice(),node(),resource());
+  assert.equal(decision.expiresAt.getTime(),now.getTime()+120_000);
+});
+
+test("decision.expiresAt defaults to a 30-second window when the caller doesn't configure one",async()=>{
+  const store=new MemoryStore();
+  const now=new Date("2026-01-01T00:00:00.000Z");
+  const clock={now:()=>now};
+  const pd=new PolicyDecisionService(store,store,new RandomIds(),clock,new HmacDecisionSigner(SECRET));
+  const {decision}=await pd.decide(identity({mfa:false}),goodDevice(),node(),resource());
+  assert.equal(decision.expiresAt.getTime(),now.getTime()+30_000);
 });

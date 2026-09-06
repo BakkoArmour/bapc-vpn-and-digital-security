@@ -3,7 +3,13 @@ import type { Clock, DecisionSigner, IdGenerator } from "../ports/infrastructure
 import type { JitRepository, PolicyRepository } from "../ports/repositories.js";
 const postureOk=(d:Device)=>!d.revoked&&!d.compromised&&d.posture.osCurrent&&d.posture.diskEncrypted&&d.posture.secureBoot&&d.posture.firewallEnabled&&d.posture.agentHealthy&&!d.posture.bannedProcessFound;
 export class PolicyDecisionService {
- constructor(private policies:PolicyRepository,private jit:JitRepository,private ids:IdGenerator,private clock:Clock,private signer:DecisionSigner){}
+ // AUTH_REFRESH_MS (config.ts's authorizationRefreshMs) was loaded and
+ // validated with nothing anywhere that ever read it — every access
+ // decision got a hard-coded 30-second expiry regardless of what an
+ // operator configured. Defaults to 30_000 so every existing caller/test
+ // that never cared about a custom refresh interval keeps working
+ // unchanged.
+ constructor(private policies:PolicyRepository,private jit:JitRepository,private ids:IdGenerator,private clock:Clock,private signer:DecisionSigner,private authorizationRefreshMs=30_000){}
  async decide(identity:IdentityContext,device:Device,node:MeshNode,resource:ResourceContext){
   const now=this.clock.now(); let action:AccessDecision["action"]="DENY",reason="default deny",policyId:string|undefined;
   if(!identity.mfa) reason="MFA required"; else if(!postureOk(device)||!node.active) reason="device is not trusted"; else {
@@ -11,7 +17,7 @@ export class PolicyDecisionService {
    for(const p of policies){if(!this.matches(p,node,resource,identity.roles))continue; policyId=p.id; action=p.action; reason=`policy ${p.name}`;
     if(p.requiresJit&&!await this.hasJit(identity.userId,resource,now)){action="DENY";reason="active JIT grant required";} break;}
   }
-  const decision:AccessDecision={allowed:action==="ALLOW",action,reason,decisionId:this.ids.next(),expiresAt:new Date(now.getTime()+30_000),...(policyId?{policyId}:{})};
+  const decision:AccessDecision={allowed:action==="ALLOW",action,reason,decisionId:this.ids.next(),expiresAt:new Date(now.getTime()+this.authorizationRefreshMs),...(policyId?{policyId}:{})};
   return {decision,signature:await this.signer.sign(decision)};
  }
  private matches(p:NetworkPolicy,n:MeshNode,r:ResourceContext,roles:string[]){return p.sourceZones.includes(n.zone)&&p.destinationZones.includes(r.zone)&&(p.protocols.includes("ANY")||p.protocols.includes(r.protocol))&&(!r.port||p.destinationPorts.length===0||p.destinationPorts.includes(r.port))&&p.requiredRoles.every(x=>roles.includes(x));}

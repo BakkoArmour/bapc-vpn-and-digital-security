@@ -146,7 +146,7 @@ const heartbeats=new HeartbeatService(repo,repo,bus,clock);
 // with the same secret PEPs already hold to call this API — see
 // HmacDecisionSigner. Was previously defined but never wired into any API,
 // which meant the actual access-decision engine had no caller at all.
-const policyDecision=new PolicyDecisionService(repo,repo,ids,clock,new HmacDecisionSigner(config.controlApiTokenSecret));
+const policyDecision=new PolicyDecisionService(repo,repo,ids,clock,new HmacDecisionSigner(config.controlApiTokenSecret),config.authorizationRefreshMs);
 const socBackend=new SecuritySocBackend(
   new PgSocData(db),new PgSocActions(threatResponse,repo,repo,enforcer,bus,ids,clock)
 );
