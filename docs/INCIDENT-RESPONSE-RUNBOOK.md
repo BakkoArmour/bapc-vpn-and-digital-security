@@ -25,23 +25,35 @@ says so explicitly rather than describing a procedure that doesn't exist.
    policy library before relying on it.
 4. Restore only with a verified clearance:
    `POST /api/v1/nodes/:id/restore {"clearanceToken": "diag-clearance:..."}`.
-   `ThreatResponseService.restore` rejects any token not prefixed
-   `diag-clearance:` — wire this prefix check to real signature verification
-   against BAPC Diagnostics™'s signing key before production use; today it is
-   a format check only.
+   `ThreatResponseService.restore` verifies the token's HMAC signature via
+   `DiagnosticsClearanceVerifier` (`integrations/diagnostics-clearance.ts`) —
+   it is a base64url-encoded, HMAC-signed `SignedEcosystemEvent` from BAPC
+   Diagnostics™, checked for signature validity, replay window, and that it
+   is scoped to this exact node. Set `DIAGNOSTICS_SHARED_SECRET` to the value
+   Diagnostics™ actually signs with; a token failing any of those checks is
+   rejected, not just one missing the `diag-clearance:` prefix.
 
 ## Certificate compromise
 
 1. `TrustCoreIssuer.revoke(serial, reason)` (`services/trust-core/issuer.ts`)
-   — marks the certificate revoked via `PgCertificateStore`. There is no
-   REST endpoint for this yet; call it from an operator script or add one
-   following the pattern of the other `/api/v1/*` routes.
-2. There is no CRL/OCSP responder in this repository — revocation is
-   currently a database flag only. Any relying party that doesn't query
-   `certificates.is_revoked` (or a CRL/OCSP service you build from it) will
-   keep accepting the revoked certificate until it expires. Build that
-   responder, or shorten `CERTIFICATE_TTL_MINUTES`, before relying on
-   revocation alone.
+   — marks the certificate revoked via `PgCertificateStore` (sets
+   `is_revoked`, `revocation_reason`, `revoked_at`). There is no REST
+   endpoint for triggering this yet; call it from an operator script or add
+   one following the pattern of the other `/api/v1/*` routes.
+2. Relying parties can check `GET /api/v1/certificates/crl` — a real,
+   `openssl`-verified RFC 5280 X.509 CRL (`services/trust-core/crl-builder.ts`),
+   public/unauthenticated by design (a CRL distribution point has no prior
+   relationship with the clients checking it), signed and rebuilt on every
+   request from the current `is_revoked=true` rows. There is still no OCSP
+   responder (OCSP needs a live per-request signing path, not just a
+   periodic list) — for now, CRL is the mechanism; shorten
+   `CERTIFICATE_TTL_MINUTES` too if your relying parties can't fetch CRLs
+   frequently enough for your risk tolerance. **Production note**: the CRL is
+   currently signed by an ephemeral per-process dev key
+   (`createSelfSignedDevCa` in `production-server.ts`) — it must be switched
+   to sign with the same HSM-backed intermediate that issues the
+   certificates it lists, or relying parties validating the CRL's own
+   signature chain will reject it.
 3. Re-issue: enroll the affected node again (`EnrollmentService.register` /
    gRPC `RegisterNode`) to get a fresh key pair and certificate — never
    reuse the compromised key.
@@ -94,12 +106,18 @@ pointing production traffic at it.
 
 ## Emergency lockdown
 
-`SecuritySocBackend.emergencyLockdown` (`src/application/soc.ts`'s
-sibling in the addendum) requires the literal typed confirmation string
-`"LOCKDOWN"` and a reason ≥20 characters, and is not currently wired to a
-REST route — the addendum's `SecuritySocBackend` and `production-server.ts`'s
-simpler `SocService` are two independent read/action layers from different
-build documents (see project memory note on this reconstruction). Wire
-`SecuritySocBackend` (with real `SocData`/`SocActions` adapters) behind an
-authenticated, owner-only route before treating emergency lockdown as
-available — it is implemented but not yet exposed.
+`POST /api/v1/soc/emergency-lockdown {"reason": "...", "confirmation": "LOCKDOWN"}`
+(role `security-owner`, rate-limited to 2/minute). `SecuritySocBackend.emergencyLockdown`
+requires the literal typed confirmation string `LOCKDOWN` and a reason
+≥20 characters, then `PgSocActions.emergencyLockdown` isolates every
+currently-active mesh node (via the configured `PolicyEnforcer`) and
+terminates every active JIT grant, publishing `security.emergency_lockdown`
+with counts of both for audit. It does not revoke certificates or
+credentials — recovery is per-node via the normal
+quarantine/restore-with-clearance flow above, node by node, once the
+incident is understood. `production-server.ts`'s simpler `SocService`
+(`/api/v1/soc/snapshot`) and the richer `SecuritySocBackend`
+(`/api/v1/soc/snapshot/full`, backed by `PgSocData`'s direct queries against
+relays/certificates/incidents) are two independent read layers from
+different build documents — both are wired now, but expect some overlap
+between what `snapshot` and `snapshot/full` return.

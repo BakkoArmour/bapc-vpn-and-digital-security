@@ -94,6 +94,33 @@ test("idempotency key reused with a different body is a conflict",async()=>{
   }finally{server.close();}
 });
 
+test("a public route requires no bearer token at all",async()=>{
+  const router=new RestRouter(new HmacBearerGuard(SECRET),new MemoryIdempotencyStore());
+  router.add("GET","/public/info",[],async()=>({open:true}),{public:true});
+  const server=createServer((req,res)=>void router.handle(req,res));
+  await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
+  const port=(server.address() as AddressInfo).port;
+  try{
+    const res=await call(port,"GET","/public/info");
+    assert.equal(res.status,200);
+    assert.equal(res.json.data.open,true);
+  }finally{server.close();}
+});
+
+test("a raw route writes the handler's content-type/body directly, no JSON envelope",async()=>{
+  const router=new RestRouter(new HmacBearerGuard(SECRET),new MemoryIdempotencyStore());
+  router.add("GET","/raw/blob",[],async()=>({contentType:"application/octet-stream",body:Buffer.from([1,2,3,4])}),{public:true,raw:true});
+  const server=createServer((req,res)=>void router.handle(req,res));
+  await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
+  const port=(server.address() as AddressInfo).port;
+  try{
+    const res=await fetch(`http://127.0.0.1:${port}/raw/blob`);
+    assert.equal(res.headers.get("content-type"),"application/octet-stream");
+    const bytes=Buffer.from(await res.arrayBuffer());
+    assert.deepEqual([...bytes],[1,2,3,4]);
+  }finally{server.close();}
+});
+
 test("metrics endpoint exposes Prometheus text format when enabled",async()=>{
   const router=new RestRouter(new HmacBearerGuard(SECRET),new MemoryIdempotencyStore(),true);
   router.add("GET","/api/v1/ping",[],async()=>({pong:true}));

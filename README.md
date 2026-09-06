@@ -58,8 +58,11 @@ This is a strict-TypeScript control plane with:
 - **Secure DNS**: a real UDP DNS server with threat-feed/DGA sinkholing and
   a DNS-over-HTTPS upstream client.
 - **Recovery & intelligence**: an out-of-band recovery channel on its own
-  port/secret, threat-signal correlation over a sliding time window, and a
-  SOC/admin console.
+  port/secret, threat-signal correlation over a sliding time window, a real
+  X.509 CRL distribution point (`GET /api/v1/certificates/crl`), a
+  cryptographically-verified Diagnostics clearance check gating node
+  restore, an owner-only emergency-lockdown endpoint (isolates every active
+  node, terminates every active JIT grant), and a SOC/admin console.
 - **Delivery**: GitHub Actions CI (build, tests including a live-Postgres
   integration test, `npm audit`, SBOM), Linux systemd + Windows (WinSW)
   endpoint-agent installers.

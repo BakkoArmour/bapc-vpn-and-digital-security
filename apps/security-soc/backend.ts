@@ -9,7 +9,12 @@ export interface SocData {
 }
 export interface SocActions {
   quarantine(nodeId:string,reason:string,actor:string):Promise<void>;
-  restore(nodeId:string,actor:string):Promise<void>;
+  // clearanceToken is required: a signed BAPC Diagnostics clearance, verified
+  // by ThreatResponseService.restore's ClearanceVerifier. The original
+  // build-document interface omitted this parameter, which would have let
+  // the SOC console restore a quarantined node with no verified forensic
+  // clearance at all — corrected here rather than reproduced.
+  restore(nodeId:string,actor:string,clearanceToken:string):Promise<void>;
   emergencyLockdown(reason:string,actor:string,confirmation:string):Promise<void>;
 }
 export class SecuritySocBackend {
@@ -24,6 +29,10 @@ export class SecuritySocBackend {
   async quarantine(nodeId:string,reason:string,actor:string){
     if(reason.trim().length<12)throw new Error("quarantine reason must be meaningful");
     await this.actions.quarantine(nodeId,reason,actor);
+    return {accepted:true,nodeId};
+  }
+  async restore(nodeId:string,actor:string,clearanceToken:string){
+    await this.actions.restore(nodeId,actor,clearanceToken);
     return {accepted:true,nodeId};
   }
   async emergencyLockdown(reason:string,actor:string,confirmation:string){

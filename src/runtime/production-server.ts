@@ -12,7 +12,15 @@ import {ThreatResponseService} from "../application/threat-response.js";
 import {RandomIds,SystemClock} from "../infrastructure/memory.js";
 import {InMemoryEnforcer, DevelopmentCertificateIssuer, NoopThreatSink} from "../infrastructure/adapters.js";
 import {HeartbeatService} from "../application/heartbeat.js";
+import {EcosystemIntegrationService} from "../application/integrations.js";
+import {DiagnosticsClearanceVerifier} from "../../integrations/diagnostics-clearance.js";
 import {PgCommandQueue} from "../../services/mesh-controller/pg-command-queue.js";
+import {SecuritySocBackend} from "../../apps/security-soc/backend.js";
+import {PgSocData} from "../../apps/security-soc/pg-soc-data.js";
+import {PgSocActions} from "../../apps/security-soc/pg-soc-actions.js";
+import {createSelfSignedDevCa} from "../../services/trust-core/dev-self-signed.js";
+import {ForgeCrlBuilder} from "../../services/trust-core/crl-builder.js";
+import {PgCertificateStore} from "../../services/trust-core/pg-certificate-store.js";
 import type {NetworkPolicy} from "../domain/types.js";
 
 const config=loadConfig();
@@ -26,12 +34,25 @@ const soc=new SocService(repo,repo,repo,repo,repo,clock);
 // InMemoryEnforcer and the development certificate issuer/threat sink below are
 // placeholders for the real PlatformAdapter-bound enforcer, TrustCoreIssuer and
 // SIEM/ThreatSink integration. See docs/CODE-ADDENDUM-INTEGRATION.md.
+const enforcer=new InMemoryEnforcer();
+const ecosystem=new EcosystemIntegrationService(config.ecosystemSecrets,bus);
+const clearance=new DiagnosticsClearanceVerifier(ecosystem);
 const threatResponse=new ThreatResponseService(
-  repo,repo,repo,repo,new InMemoryEnforcer(),new DevelopmentCertificateIssuer(),bus,new NoopThreatSink()
+  repo,repo,repo,repo,enforcer,new DevelopmentCertificateIssuer(),bus,new NoopThreatSink(),clearance
 );
 
 const heartbeats=new HeartbeatService(repo,repo,bus,clock);
 const commandQueue=new PgCommandQueue(db);
+const socBackend=new SecuritySocBackend(
+  new PgSocData(db),new PgSocActions(threatResponse,repo,repo,enforcer,bus,ids,clock)
+);
+
+// Development-only CRL issuer — see runbooks/root-ca-ceremony.md. Production
+// must sign the CRL with the same HSM-backed intermediate that
+// TrustCoreIssuer issues node certificates with, not this ephemeral key.
+const devCa=await createSelfSignedDevCa("BAPC Dev CRL Issuer","production-server-crl-issuer");
+const crlBuilder=new ForgeCrlBuilder();
+const certificateStore=new PgCertificateStore(db);
 
 const guard=new HmacBearerGuard(config.controlApiTokenSecret);
 const router=new RestRouter(guard,new PgIdempotencyStore(db),true);
@@ -63,6 +84,28 @@ router.add("GET","/api/v1/events",["security-read"],async({query})=>
 );
 
 router.add("GET","/api/v1/soc/snapshot",["security-read"],async()=>soc.snapshot());
+
+router.add("GET","/api/v1/soc/snapshot/full",["security-read"],async()=>socBackend.snapshot());
+
+router.add("POST","/api/v1/soc/emergency-lockdown",["security-owner"],async({claims,body})=>
+  socBackend.emergencyLockdown(String(body.reason??""),claims.sub,String(body.confirmation??"")),
+  {rateLimit:{limit:2,windowMs:60_000}}
+);
+
+// Real X.509 CRL distribution point. Public by design: relying parties
+// checking a certificate's revocation status have no prior relationship
+// with this API. See docs/INCIDENT-RESPONSE-RUNBOOK.md's certificate-
+// compromise procedure — this is what closes "revocation is a DB flag only".
+router.add("GET","/api/v1/certificates/crl",[],async()=>{
+  const revoked=await certificateStore.listRevoked();
+  const now=clock.now();
+  const body=await crlBuilder.build({
+    issuerCertificatePem:devCa.certificatePem,
+    thisUpdate:now,nextUpdate:new Date(now.getTime()+24*3_600_000),
+    revoked,sign:tbs=>devCa.keys.sign(devCa.keyReference,"RS256",tbs)
+  });
+  return {contentType:"application/pkix-crl",body};
+},{public:true,raw:true,rateLimit:{limit:120,windowMs:60_000}});
 
 router.add("POST","/api/v1/jit",["security-user"],async({claims,body})=>
   jit.request(

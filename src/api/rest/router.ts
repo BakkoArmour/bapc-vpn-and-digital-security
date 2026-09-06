@@ -10,7 +10,19 @@ export type JsonHandler=(ctx:{
   request:IncomingMessage; claims:{sub:string;roles:string[]}; body:any;
   params:Record<string,string>; query:URLSearchParams;
 })=>Promise<unknown>;
-export interface RouteOptions {idempotent?:boolean; rateLimit?:RateLimitRule;}
+export interface RawResponse {contentType:string; body:Buffer;}
+export interface RouteOptions {
+  idempotent?:boolean; rateLimit?:RateLimitRule;
+  // Skips bearer-token verification entirely. Only for routes that are
+  // genuinely public by design (e.g. a CRL distribution point, which relying
+  // parties fetch with no prior relationship to this API) — never use this
+  // to work around a route that "should" be authenticated.
+  public?:boolean;
+  // The handler returns a RawResponse (binary content-type) instead of a
+  // JSON-serializable value; the router writes it directly with no
+  // {requestId,data} envelope.
+  raw?:boolean;
+}
 interface Route {method:string;pattern:RegExp;keys:string[];roles:string[];handler:JsonHandler;options:RouteOptions;}
 
 const DEFAULT_RATE_LIMIT:RateLimitRule={limit:60,windowMs:60_000};
@@ -46,7 +58,7 @@ export class RestRouter {
       if(!route)throw new HttpError(404,"route not found","not_found");
       const match=path.match(route.pattern)!;
       const params=Object.fromEntries(route.keys.map((k,i)=>[k,decodeURIComponent(match[i+1]??"")]));
-      const claims=this.guard.verify(req,route.roles);
+      const claims=route.options.public?{sub:"anonymous",roles:[]}:this.guard.verify(req,route.roles);
 
       const rule=route.options.rateLimit??DEFAULT_RATE_LIMIT;
       const rateResult=this.limiter.check(`${claims.sub}:${route.method}:${path}`,rule);
@@ -56,6 +68,12 @@ export class RestRouter {
       }
 
       const body=await this.readJson(req);
+      if(route.options.raw){
+        const raw=await route.handler({request:req,claims,body,params,query}) as RawResponse;
+        res.writeHead(200,{"content-type":raw.contentType,"cache-control":"no-store"});
+        res.end(raw.body);
+        return;
+      }
       const run=()=>route.handler({request:req,claims,body,params,query}).then(data=>({status:200,body:{requestId,data}}));
       const idempotencyKey=route.options.idempotent
         ? (req.headers["idempotency-key"] as string|undefined) : undefined;

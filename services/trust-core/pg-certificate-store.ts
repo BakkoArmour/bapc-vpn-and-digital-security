@@ -17,12 +17,12 @@ export class PgCertificateStore implements CertificateRecordStore {
        record.issuedAt,record.expiresAt,record.revoked]
     );
   }
-  async revoke(serial:string,reason:string,_at:Date){
+  async revoke(serial:string,reason:string,at:Date){
     await this.db.query(
       `UPDATE bapc_security_core.certificates
-       SET is_revoked=true, revocation_reason=$2
+       SET is_revoked=true, revocation_reason=$2, revoked_at=$3
        WHERE serial_number=$1`,
-      [serial,reason]
+      [serial,reason,at]
     );
   }
   async expiringWithin(days:number){
@@ -34,5 +34,12 @@ export class PgCertificateStore implements CertificateRecordStore {
       [days]
     );
     return r.rows;
+  }
+  async listRevoked(){
+    const r=await this.db.query(
+      `SELECT serial_number, revoked_at FROM bapc_security_core.certificates
+       WHERE is_revoked=true AND revoked_at IS NOT NULL ORDER BY revoked_at`
+    );
+    return r.rows.map(row=>({serialHex:row.serial_number as string,revokedAt:row.revoked_at as Date}));
   }
 }

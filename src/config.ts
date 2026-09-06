@@ -10,6 +10,10 @@ export interface SecurityConfig {
   bindHost:string;
   port:number;
   oobRequired:boolean;
+  ecosystemSecrets:{
+    diagnostics:string; headquarters:string;
+    "cloud-deployment":string; integration:string;
+  };
 }
 const int=(v:string|undefined,d:number)=>{
   const n=Number(v??d);
@@ -17,12 +21,18 @@ const int=(v:string|undefined,d:number)=>{
   return n;
 };
 const bool=(v:string|undefined,d:boolean)=>v===undefined?d:/^(1|true|yes)$/i.test(v);
+const ecosystemSecret=(v:string|undefined,name:string,production:boolean)=>{
+  if(production&&(!v||v.length<32))
+    throw new Error(`production ${name} shared secret must be set and at least 32 characters`);
+  return v||`development-${name}-secret-change-me`;
+};
 export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
   const environment=(env.NODE_ENV as SecurityConfig["environment"])??"development";
   const secret=env.CONTROL_API_TOKEN_SECRET??"";
   const eventSecret=env.EVENT_SIGNING_SECRET??"";
   if(environment==="production"&&(secret.length<32||eventSecret.length<32))
     throw new Error("production control/event signing secrets must be at least 32 characters");
+  const production=environment==="production";
   return {
     environment,
     databaseUrl:env.DATABASE_URL??"postgres://localhost/bapc_security_core",
@@ -34,6 +44,12 @@ export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
     eventSigningSecret:eventSecret||"development-event-secret-change-me",
     bindHost:env.BIND_HOST??(environment==="production"?"0.0.0.0":"127.0.0.1"),
     port:int(env.PORT,8080),
-    oobRequired:bool(env.OOB_REQUIRED,true)
+    oobRequired:bool(env.OOB_REQUIRED,true),
+    ecosystemSecrets:{
+      diagnostics:ecosystemSecret(env.DIAGNOSTICS_SHARED_SECRET,"diagnostics",production),
+      headquarters:ecosystemSecret(env.HEADQUARTERS_SHARED_SECRET,"headquarters",production),
+      "cloud-deployment":ecosystemSecret(env.CLOUD_DEPLOYMENT_SHARED_SECRET,"cloud-deployment",production),
+      integration:ecosystemSecret(env.INTEGRATION_SHARED_SECRET,"integration",production)
+    }
   };
 };
