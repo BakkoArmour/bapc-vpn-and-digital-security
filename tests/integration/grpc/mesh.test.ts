@@ -169,21 +169,28 @@ test("gRPC registerNode rejects a request with no CSR",async()=>{
   }
 });
 
+// This used to pass for the wrong reason: it called rotatePeerKey with
+// nodeId:"does-not-exist", so it was actually exercising the node-lookup
+// check, not signature verification at all — an empty signature against a
+// real, enrolled node's id was never tried, so this test would have kept
+// passing even if verifyRotationSignature's empty-signature check were
+// deleted entirely. Fixed to rotate a real enrolled node's own id.
 test("gRPC rotatePeerKey rejects an unsigned rotation",async()=>{
-  const {server,client}=await startServer();
+  const {server,client,store}=await startServer();
   try{
-    const enrolled:any=await new Promise((resolve,reject)=>{
+    await new Promise((resolve,reject)=>{
       client.registerNode({
         hardwareUuid:"hw-xyz-9",wireguardPublicKey:"pubkey-2",
         hardwareAttestationQuote:Buffer.from("quote"),osSignature:"windows-11",
         csrDer:generateCsrDer("node-hw-xyz-9")
       },(error:Error|null,res:unknown)=>error?reject(error):resolve(res));
     });
-    void enrolled;
+    const node=await store.findByPublicKey("pubkey-2");
+    assert.ok(node);
     await assert.rejects(()=>new Promise((resolve,reject)=>{
-      client.rotatePeerKey({nodeId:"does-not-exist",newPublicKey:"pubkey-3",signature:Buffer.alloc(0)},
+      client.rotatePeerKey({nodeId:node!.id,newPublicKey:"pubkey-3",signature:Buffer.alloc(0)},
         (error:Error|null,res:unknown)=>error?reject(error):resolve(res));
-    }));
+    }),/rotation signature does not verify/);
   }finally{
     server.forceShutdown();
   }
