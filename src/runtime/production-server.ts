@@ -119,10 +119,8 @@ const threatCorrelator=new ThreatCorrelator(threatEngine,300_000,{
 // reach it. HttpOobChannel talks to the separate oob-server.ts process
 // (its own port/secret, by design — see that file's own comment) while
 // PgRecoveryStore keeps the durable last-known-good record on this side.
-const oobController=new OobController(
-  new PgRecoveryStore(db),
-  new HttpOobChannel(config.oobControllerUrl,config.oobSharedSecret)
-);
+const oobChannel=new HttpOobChannel(config.oobControllerUrl,config.oobSharedSecret);
+const oobController=new OobController(new PgRecoveryStore(db),oobChannel);
 
 const heartbeats=new HeartbeatService(repo,repo,bus,clock);
 // The zero-trust Policy Decision Point (item #30 in the feature catalog:
@@ -176,7 +174,18 @@ router.add("PUT","/api/v1/policies/:id",["security-approver"],async({claims,para
 // isn't reachable within the window — see SafeApplyService and
 // PgPolicyEnforcer.stage/rollback. Previously SafeApplyService had no caller
 // anywhere in this file.
+// config.oobRequired (OOB_REQUIRED) was loaded but never read anywhere —
+// docs/SECURITY-RUNBOOK.md's "Establish the OOB channel before applying
+// the first mesh firewall policy" and CODE-ADDENDUM-INTEGRATION.md's
+// "Establish and verify OOB control before committing production
+// firewall/mesh changes" had no code actually enforcing either. A firewall
+// push that goes wrong is exactly the scenario the OOB channel exists to
+// recover from — pushing one while that channel is already down means a
+// bad policy has no independent recovery path at all.
 router.add("POST","/api/v1/policies/apply",["security-approver"],async({claims,body})=>{
+  if(config.oobRequired&&!(await oobChannel.healthy())){
+    throw new HttpError(503,"OOB recovery channel is unreachable — refusing to apply a policy change with no independent recovery path (set OOB_REQUIRED=false to override)","oob_unavailable");
+  }
   const policies=await repo.listActive();
   const timeoutMs=Number(body.timeoutMs??config.safeApplyTimeoutMs);
   const result=await safeApply.apply(policies,timeoutMs);
@@ -276,6 +285,26 @@ router.add("POST","/api/v1/nodes/:id/restore",["security-approver"],async({claim
   const result=await threatResponse.restore(params.id!,String(body.clearanceToken??""));
   await audit.record(claims.sub,"NODE_RESTORED",params.id!,{});
   return result;
+});
+
+// PlatformAdapter.setKillSwitch/setDns and ProductionAgent.execute's
+// SET_KILL_SWITCH/SET_DNS cases were fully implemented on the agent side
+// with nothing anywhere that ever enqueued either command — a node could
+// receive and correctly act on them, but no operator or service could ever
+// actually send one.
+router.add("POST","/api/v1/nodes/:id/kill-switch",["security-approver"],async({claims,params,body})=>{
+  const enabled=Boolean(body.enabled);
+  await commandQueue.enqueue(params.id!,"SET_KILL_SWITCH",{enabled});
+  await audit.record(claims.sub,"KILL_SWITCH_SET",params.id!,{enabled});
+  return {queued:true,enabled};
+});
+
+router.add("POST","/api/v1/nodes/:id/dns",["security-approver"],async({claims,params,body})=>{
+  const servers=Array.isArray(body.servers)?body.servers.map(String):[];
+  if(servers.length===0)throw new HttpError(400,"servers (non-empty array) is required","invalid_request");
+  await commandQueue.enqueue(params.id!,"SET_DNS",{servers});
+  await audit.record(claims.sub,"DNS_SET",params.id!,{servers});
+  return {queued:true,servers};
 });
 
 router.add("POST","/api/v1/agent/heartbeat",["security-agent"],async({body})=>{
