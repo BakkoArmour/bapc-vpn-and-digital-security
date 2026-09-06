@@ -46,7 +46,8 @@ const CONTROLLER_COMMAND_ACTIONS=new Set(["NOOP","RELOAD_POLICIES","ROTATE_KEYS"
 // instead of silently falling back to NOOP.
 const REST_COMMAND_TO_CONTROLLER_ACTION:Record<string,string>={
   QUARANTINE:"QUARANTINE_NODE",
-  RESTORE:"RELOAD_POLICIES"
+  RESTORE:"RELOAD_POLICIES",
+  APPLY_PEERS:"RELOAD_POLICIES"
 };
 const controllerActionFor=(commandType:string):string=>
   CONTROLLER_COMMAND_ACTIONS.has(commandType)?commandType:REST_COMMAND_TO_CONTROLLER_ACTION[commandType]??"NOOP";

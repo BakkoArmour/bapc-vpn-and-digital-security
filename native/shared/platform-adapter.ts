@@ -4,6 +4,12 @@ export interface PlatformAdapter {
     privateKeyReference:string;addresses:string[];listenPort?:number;
     peers:Array<{publicKey:string;endpoint?:string;allowedIps:string[];keepaliveSeconds:number}>;
   }):Promise<void>;
+  // Updates only the peer set on an interface `applyWireGuard` already
+  // brought up — never touches the local private key/address/listen-port, so
+  // the control plane (which never holds this node's private key) can safely
+  // push topology changes (peer joined, peer's key rotated) without a full
+  // re-initialization.
+  applyPeers(peers:Array<{publicKey:string;endpoint?:string;allowedIps:string[];keepaliveSeconds:number}>):Promise<void>;
   applyFirewall(input:{
     commitId:string;defaultAction:"DENY";rules:Array<{
       id:string;action:"ALLOW"|"DENY";protocols:string[];ports:number[];

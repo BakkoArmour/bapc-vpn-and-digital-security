@@ -38,6 +38,7 @@ export class ProductionAgent {
         case "SET_KILL_SWITCH": await this.platform.setKillSwitch(Boolean(c.payload.enabled));break;
         case "SET_DNS": await this.platform.setDns(c.payload.servers);break;
         case "APPLY_WIREGUARD": await this.platform.applyWireGuard(c.payload);break;
+        case "APPLY_PEERS": await this.platform.applyPeers(c.payload.peers);break;
         case "APPLY_FIREWALL": await this.platform.applyFirewall(c.payload);break;
         case "ROLLBACK_FIREWALL": await this.platform.rollbackFirewall(c.payload.commitId);break;
         case "QUARANTINE": await this.platform.isolate(c.payload.reason??"controller quarantine");break;

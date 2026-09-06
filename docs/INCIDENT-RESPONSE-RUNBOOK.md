@@ -25,11 +25,15 @@ says so explicitly rather than describing a procedure that doesn't exist.
 2. Confirm containment: the node should no longer appear in
    `GET /api/v1/nodes` as active, and `GET /api/v1/soc/snapshot`'s
    `compromisedDevices` count should increment.
-3. Investigate. Diagnostics access during quarantine is a policy decision
-   for your `PolicyEnforcer`/zone rules (`ZONE_FORENSIC_ISOLATION` in
-   `src/domain/types.ts`) — this repository defines the zone but does not
-   ship a concrete "diagnostics-only" firewall rule set; author one in your
-   policy library before relying on it.
+3. Investigate. Diagnostics access during quarantine is a `PolicyDecisionService`
+   decision (`POST /api/v1/access/decide`) gated on `ZONE_FORENSIC_ISOLATION`
+   (`src/domain/types.ts`). `db/012_forensic_isolation_diagnostics_policy.sql`
+   ships a default policy: a `security-approver` identity connecting from a
+   `ZONE_ADMIN_MGMT` node may reach `ZONE_FORENSIC_ISOLATION` resources, but
+   only with an active, matching JIT grant — so access is still time-boxed
+   and justified per incident, not a standing exception. Tighten
+   `destinationPorts`/`protocols` in your own policy library if your
+   diagnostics tooling uses a fixed port.
 4. Restore only with a verified clearance:
    `POST /api/v1/nodes/:id/restore {"clearanceToken": "diag-clearance:..."}`.
    `ThreatResponseService.restore` verifies the token's HMAC signature via

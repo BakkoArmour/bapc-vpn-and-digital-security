@@ -57,6 +57,28 @@ test("LinuxPlatformAdapter.applyWireGuard configures the interface via wg/ip",as
   assert.ok(calls.some(c=>c.cmd==="ip"&&c.args.includes("add")));
 });
 
+test("LinuxPlatformAdapter.applyPeers updates peers via `wg set` without ever touching private-key",async()=>{
+  const {run,calls}=fakeRunner({
+    which:()=>({stdout:"/usr/bin/wg",stderr:""}),
+    wg:()=>({stdout:"",stderr:""})
+  });
+  const adapter=new LinuxPlatformAdapter("bapc0",run);
+  await adapter.applyPeers([{publicKey:VALID_KEY,allowedIps:["10.144.0.6/32"],keepaliveSeconds:25,endpoint:"relay.example:51820"}]);
+  const wgCall=calls.find(c=>c.cmd==="wg");
+  assert.ok(wgCall);
+  assert.ok(wgCall!.args.includes("peer"));
+  assert.ok(wgCall!.args.includes(VALID_KEY));
+  assert.ok(wgCall!.args.includes("endpoint"));
+  assert.ok(!wgCall!.args.includes("private-key"));
+  assert.equal(calls.some(c=>c.cmd==="ip"),false);
+});
+
+test("LinuxPlatformAdapter.applyPeers rejects a malformed peer key",async()=>{
+  const {run}=fakeRunner({which:()=>({stdout:"/usr/bin/wg",stderr:""})});
+  const adapter=new LinuxPlatformAdapter("bapc0",run);
+  await assert.rejects(()=>adapter.applyPeers([{publicKey:"not-a-real-key",allowedIps:["10.0.0.2/32"],keepaliveSeconds:25}]),/invalid peer public key/);
+});
+
 test("LinuxPlatformAdapter.applyFirewall writes an nft ruleset and applies it",async()=>{
   const {run,calls}=fakeRunner({
     which:()=>({stdout:"/usr/sbin/nft",stderr:""}),
@@ -195,6 +217,19 @@ test("WindowsPlatformAdapter.applyWireGuard writes a conf and installs the tunne
   assert.match(conf,new RegExp(VALID_KEY.replace(/\+/g,"\\+")));
 });
 
+test("WindowsPlatformAdapter.applyPeers updates peers via wg.exe, never reinstalling the tunnel service",async()=>{
+  const {run,calls}=fakeRunner({
+    "wg.exe":()=>({stdout:"",stderr:""})
+  });
+  const adapter=new WindowsPlatformAdapter("BAPC",run);
+  await adapter.applyPeers([{publicKey:VALID_KEY,allowedIps:["10.144.0.10/32"],keepaliveSeconds:25}]);
+  const wgCall=calls.find(c=>c.cmd==="wg.exe");
+  assert.ok(wgCall);
+  assert.ok(wgCall!.args.includes("peer"));
+  assert.ok(wgCall!.args.includes(VALID_KEY));
+  assert.equal(calls.some(c=>c.cmd==="wireguard.exe"),false);
+});
+
 test("WindowsPlatformAdapter.applyFirewall passes rules to apply.ps1 as a JSON payload file",async()=>{
   const {run,calls}=fakeRunner({
     "powershell.exe":(args)=>{
@@ -227,5 +262,6 @@ test("WindowsPlatformAdapter.collectPosture parses apply.ps1's JSON output",asyn
 test("ApplePlatformAdapter throws NotImplemented rather than silently succeeding",async()=>{
   const adapter:PlatformAdapter=new ApplePlatformAdapter("ios");
   await assert.rejects(()=>adapter.applyWireGuard({privateKeyReference:"x",addresses:[],peers:[]}),/NetworkExtension/);
+  await assert.rejects(()=>adapter.applyPeers([]),/NetworkExtension/);
   await assert.rejects(()=>adapter.collectPosture(),/NetworkExtension/);
 });

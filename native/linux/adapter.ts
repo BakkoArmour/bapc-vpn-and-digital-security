@@ -77,6 +77,25 @@ export class LinuxPlatformAdapter implements PlatformAdapter, AgentPlatform {
     }
   }
 
+  // `wg set <iface> peer ...` updates/adds each named peer's config in place
+  // and, critically, never touches `private-key` when that flag is omitted —
+  // unlike applyWireGuard, this never receives or writes any key material for
+  // this node itself. Does not remove peers absent from `peers`: full
+  // stale-peer teardown needs `wg syncconf` against a complete peer set,
+  // which is a separate concern from delivering a topology update.
+  async applyPeers(peers:Array<{publicKey:string;endpoint?:string;allowedIps:string[];keepaliveSeconds:number}>):Promise<void>{
+    await this.requireBinary("wg");
+    for(const p of peers){assertKey(p.publicKey,"peer public key");assertCidrList(p.allowedIps);}
+    if(peers.length===0)return;
+    const setArgs=["set",this.iface];
+    for(const p of peers){
+      setArgs.push("peer",p.publicKey,"allowed-ips",p.allowedIps.join(","),
+        "persistent-keepalive",String(p.keepaliveSeconds));
+      if(p.endpoint)setArgs.push("endpoint",p.endpoint);
+    }
+    await this.run("wg",setArgs);
+  }
+
   async applyFirewall(input:{
     commitId:string;defaultAction:"DENY";rules:Array<{
       id:string;action:"ALLOW"|"DENY";protocols:string[];ports:number[];

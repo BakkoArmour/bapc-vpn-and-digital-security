@@ -13,9 +13,11 @@ import {RestRouter} from "../api/rest/router.js";
 import {JitService} from "../application/jit.js";
 import {SocService} from "../application/soc.js";
 import {ThreatResponseService} from "../application/threat-response.js";
+import {SafeApplyService} from "../application/safe-apply.js";
 import {RandomIds,SystemClock} from "../infrastructure/memory.js";
 import {NoopThreatSink} from "../infrastructure/adapters.js";
 import {PgPolicyEnforcer} from "../infrastructure/pg-policy-enforcer.js";
+import {PgControlPlaneProbe} from "../infrastructure/pg-control-plane-probe.js";
 import {HeartbeatService} from "../application/heartbeat.js";
 import {PolicyDecisionService} from "../application/policy.js";
 import {HmacDecisionSigner} from "../infrastructure/hmac-decision-signer.js";
@@ -47,11 +49,17 @@ const soc=new SocService(repo,repo,repo,repo,repo,clock);
 // PgPolicyEnforcer.isolateNode/restoreNode enqueue into the same durable
 // command queue the REST endpoint-agent heartbeat and the mesh-grpc
 // streamHeartbeat both drain (see PgMeshCommandSink, src/api/grpc/server.ts),
-// so a quarantine actually reaches the node. stage/commit/rollback (fleet-
-// wide staged-policy bookkeeping, not yet bound to node delivery) stay
-// in-memory — see docs/CODE-ADDENDUM-INTEGRATION.md.
+// so a quarantine actually reaches the node. stage/rollback broadcast a real
+// APPLY_FIREWALL/ROLLBACK_FIREWALL command to every active node the same way.
 const commandQueue=new PgCommandQueue(db);
-const enforcer=new PgPolicyEnforcer(commandQueue);
+const enforcer=new PgPolicyEnforcer(commandQueue,repo);
+// SafeApplyService (src/application/safe-apply.ts) existed with no caller
+// anywhere in production — a staged policy set had nowhere to be applied
+// from and nothing to auto-rollback against. PgControlPlaneProbe checks the
+// one thing synchronously verifiable from here (see its own comment for why
+// per-node reachability isn't): the database every command-delivery path
+// depends on.
+const safeApply=new SafeApplyService(enforcer,new PgControlPlaneProbe(db),bus,ids,clock);
 const ecosystem=new EcosystemIntegrationService(config.ecosystemSecrets,bus);
 const clearance=new DiagnosticsClearanceVerifier(ecosystem);
 
@@ -111,6 +119,17 @@ router.add("PUT","/api/v1/policies/:id",["security-approver"],async({params,body
   await repo.save(policy);
   return policy;
 },{idempotent:true});
+
+// Pushes the currently-active policy set to every active node as a real
+// firewall commit, auto-rolling back if the control plane's own database
+// isn't reachable within the window — see SafeApplyService and
+// PgPolicyEnforcer.stage/rollback. Previously SafeApplyService had no caller
+// anywhere in this file.
+router.add("POST","/api/v1/policies/apply",["security-approver"],async({body})=>{
+  const policies=await repo.listActive();
+  const timeoutMs=Number(body.timeoutMs??config.safeApplyTimeoutMs);
+  return safeApply.apply(policies,timeoutMs);
+},{rateLimit:{limit:5,windowMs:60_000}});
 
 router.add("GET","/api/v1/events",["security-read"],async({query})=>
   repo.recent(Number(query.get("limit")??"100"))

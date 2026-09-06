@@ -108,6 +108,45 @@ test("denies with default-deny when no policy matches the requested resource/zon
   assert.equal(decision.reason,"default deny");
 });
 
+// Mirrors db/012_forensic_isolation_diagnostics_policy.sql's default policy
+// exactly, closing the gap docs/INCIDENT-RESPONSE-RUNBOOK.md called out: this
+// proves an approved investigator, connecting from an admin-management-zone
+// node with an active JIT grant, can actually reach a quarantined node's
+// forensic-isolation-zone data — and that nobody else can.
+test("the default forensic-isolation diagnostics policy allows a JIT-approved security-approver from ZONE_ADMIN_MGMT, and default-denies everyone else",async()=>{
+  const store=new MemoryStore();
+  await store.save({
+    id:"p1",name:"default-forensic-isolation-diagnostics-access",
+    sourceZones:["ZONE_ADMIN_MGMT"],destinationZones:["ZONE_FORENSIC_ISOLATION"],
+    protocols:["ANY"],destinationPorts:[],action:"ALLOW",requiredRoles:["security-approver"],
+    requiresJit:true,priority:100,version:1,active:true
+  });
+  const pd=new PolicyDecisionService(store,store,new RandomIds(),new SystemClock(),new HmacDecisionSigner(SECRET));
+  const investigator=identity({roles:["security-approver"]});
+  const investigatorNode=node({zone:"ZONE_ADMIN_MGMT"});
+  const forensicResource=resource({resource:"quarantined-node-1",zone:"ZONE_FORENSIC_ISOLATION",protocol:"TCP",port:8443});
+
+  const withoutJit=await pd.decide(investigator,goodDevice(),investigatorNode,forensicResource);
+  assert.equal(withoutJit.decision.allowed,false);
+  assert.equal(withoutJit.decision.reason,"active JIT grant required");
+
+  const now=new Date();
+  await store.save({
+    id:"g1",userId:"u1",targetResource:"quarantined-node-1",targetZone:"ZONE_FORENSIC_ISOLATION",
+    justification:"investigating a compromised node",grantedAt:now,expiresAt:new Date(now.getTime()+60_000),terminated:false
+  });
+  const withJit=await pd.decide(investigator,goodDevice(),investigatorNode,forensicResource);
+  assert.equal(withJit.decision.allowed,true);
+
+  const wrongRole=await pd.decide(identity({roles:["engineer"]}),goodDevice(),investigatorNode,forensicResource);
+  assert.equal(wrongRole.decision.allowed,false);
+  assert.equal(wrongRole.decision.reason,"default deny");
+
+  const wrongSourceZone=await pd.decide(investigator,goodDevice(),node({zone:"ZONE_DEV"}),forensicResource);
+  assert.equal(wrongSourceZone.decision.allowed,false);
+  assert.equal(wrongSourceZone.decision.reason,"default deny");
+});
+
 test("a required role missing from the identity causes the policy to be skipped",async()=>{
   const store=new MemoryStore();
   await store.save({

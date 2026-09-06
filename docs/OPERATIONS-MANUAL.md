@@ -95,10 +95,14 @@ bearer token — this repository doesn't do that mapping for you.
   `db/*.sql` is forward-only). Roll back schema changes by restoring from a
   backup (`scripts/db-restore.sh`) taken before the upgrade, not by hand-
   writing reverse SQL against a live system.
-- **Network policy**: `SafeApplyService` already stages, canary-verifies, and
-  auto-rolls-back a policy commit within its configured timeout
-  (`SAFE_APPLY_TIMEOUT_MS`) — a bad policy push should self-heal without
-  manual rollback in the common case.
+- **Network policy**: `POST /api/v1/policies/apply` (role `security-approver`)
+  pushes the currently-active policy set to every active node as a real
+  `APPLY_FIREWALL` command (`PgPolicyEnforcer`/`PgMeshCommandSink`'s durable
+  command queue), auto-rolling it back with `ROLLBACK_FIREWALL` if the
+  control plane's own database isn't reachable within the configured timeout
+  (`SAFE_APPLY_TIMEOUT_MS`, default 60s, or pass `timeoutMs` in the request
+  body) — a bad policy push should self-heal without manual rollback in the
+  common case.
 
 ## Backup and restore
 
