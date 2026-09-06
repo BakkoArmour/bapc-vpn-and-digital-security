@@ -13,10 +13,26 @@ x-control-env: &control-env
   CLOUD_DEPLOYMENT_SHARED_SECRET: ${CLOUD_DEPLOYMENT_SHARED_SECRET:-development-cloud-deployment-secret-change-me}
   INTEGRATION_SHARED_SECRET: ${INTEGRATION_SHARED_SECRET:-development-integration-secret-change-me}
 
-# Two networks, deliberately not one — this is a zero-trust-themed project,
-# so "everything can reach the internet" is not the default:
-#   control  — internal-only (no route out). Postgres and every pure
-#              control-plane service that talks only to each other.
+# Three networks. An earlier version of this file used two (control/egress)
+# on the theory that `internal: true` meant "no outbound internet" — but
+# actually verifying this against a real Docker daemon (not just `compose
+# config`, which only validates YAML/schema and can't catch this) showed
+# `internal: true` ALSO silently disables inbound `ports:` publishing
+# entirely, because Docker's NAT-based port publishing requires the same
+# gateway route that "internal" removes. That made control-api, mesh-grpc,
+# oob-controller and soc-console — services that exist specifically to be
+# reached from outside the Docker network — completely unreachable from the
+# host, while `docker compose ps` still showed them as "Up (healthy)" since
+# their healthchecks run inside the container's own namespace. Fixed by
+# splitting "needs no reachability at all, in or out" from "needs host
+# reachability but not internet":
+#   control  — internal-only. Only Postgres, the one-shot migrate job, and
+#              the maintenance-worker background loop — none of them are
+#              ever dialed from outside this compose project.
+#   api      — a normal bridge (host ports work), but nothing here gets an
+#              `egress` membership, so no outbound internet either — for the
+#              client/operator-facing services: control-api, mesh-grpc,
+#              oob-controller, soc-console.
 #   egress   — a normal bridge WITH internet access, for the three services
 #              whose job actually requires it: secure-dns (DoH upstream),
 #              blind-relay (relays real traffic to/from internet peers) and
@@ -49,7 +65,7 @@ services:
   control-api:
     <<: *app-image
     environment: {<<: *control-env, BIND_HOST: "0.0.0.0", PORT: "8080"}
-    networks: [control]
+    networks: [control, api]
     depends_on:
       migrate: {condition: service_completed_successfully}
     command: ["node", "dist/src/runtime/production-server.js"]
@@ -59,7 +75,7 @@ services:
   mesh-grpc:
     <<: *app-image
     environment: {<<: *control-env, BIND_HOST: "0.0.0.0", GRPC_PORT: "50051"}
-    networks: [control]
+    networks: [control, api]
     depends_on:
       migrate: {condition: service_completed_successfully}
     command: ["node", "dist/src/runtime/grpc-server.js"]
@@ -68,7 +84,7 @@ services:
   oob-controller:
     <<: *app-image
     environment: {<<: *control-env, OOB_BIND_HOST: "0.0.0.0", OOB_PORT: "8181"}
-    networks: [control]
+    networks: [control, api]
     depends_on:
       migrate: {condition: service_completed_successfully}
     command: ["node", "dist/src/runtime/oob-server.js"]
@@ -87,7 +103,8 @@ services:
 
   soc-console:
     <<: *app-image
-    networks: [control]
+    environment: {ADMIN_CONSOLE_BIND_HOST: "0.0.0.0"}
+    networks: [api]
     command: ["node", "dist/src/runtime/admin-console-server.js"]
     ports: ["8090:8090"] # static file server only — no database, no secrets
 
@@ -116,5 +133,6 @@ services:
 
 networks:
   control: {internal: true}
+  api: {}
   egress: {}
 volumes: {security-db: {}}

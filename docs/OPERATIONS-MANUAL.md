@@ -26,6 +26,15 @@ Each reads its configuration from environment variables — see `.env.example`
 for the full list and `src/config.ts` for the REST API's validation rules
 (production refuses default development secrets).
 
+**Bearer token `sub` must be a UUID.** `jit_grants.user_id` (and other
+identity-keyed columns) are `uuid NOT NULL` — a bearer token whose `sub`
+claim isn't a valid UUID fails with a raw-looking Postgres error
+("invalid input syntax for type uuid") on the first call that persists it,
+surfaced as a 400. Internal BAPC identity is assumed to assign UUIDs; if you
+wire in an external OIDC/SAML IdP whose `sub` is a different format (email,
+`auth0|...`, etc.), map it to a stable internal UUID before minting the
+bearer token — this repository doesn't do that mapping for you.
+
 ## Installation
 
 1. Provision PostgreSQL 16+ and set `DATABASE_URL`.

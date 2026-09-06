@@ -30,7 +30,11 @@ if(process.argv[1]?.endsWith("admin-console-server.js")){
   const publicDir=join(__dirname,"..","..","..","apps","security-soc","public");
   const server=createServer((req,res)=>void createAdminConsoleHandler(publicDir)(req,res));
   const port=Number(process.env.ADMIN_CONSOLE_PORT??8090);
-  const host=process.env.ADMIN_CONSOLE_BIND_HOST??"127.0.0.1";
+  // Matches src/config.ts's NODE_ENV-aware default: loopback-only in dev,
+  // all-interfaces in production (e.g. so a container's published port
+  // actually reaches this process) — this file doesn't use loadConfig()
+  // since it needs no database/secrets, but should still default sanely.
+  const host=process.env.ADMIN_CONSOLE_BIND_HOST??(process.env.NODE_ENV==="production"?"0.0.0.0":"127.0.0.1");
   server.listen(port,host,()=>{
     console.log(JSON.stringify({event:"ready",service:"bapc-security-soc-console",host,port}));
   });

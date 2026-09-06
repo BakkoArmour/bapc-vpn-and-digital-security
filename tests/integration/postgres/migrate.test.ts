@@ -87,11 +87,42 @@ test("live: full schema migrates cleanly against real Postgres",{skip:!liveDatab
   try{
     const {fileURLToPath}=await import("node:url");
     const runner=new MigrationRunner(db);
-    const migrations=loadMigrations(fileURLToPath(new URL("../../../db",import.meta.url)));
+    const migrations=loadMigrations(fileURLToPath(new URL("../../../../db",import.meta.url)));
     const first=await runner.apply(migrations);
     assert.ok(first.applied.length>0 || first.skipped.length>0);
     const second=await runner.apply(migrations);
     assert.deepEqual(second.applied,[]);
+  }finally{
+    await db.close();
+  }
+});
+
+// Regression coverage for a real bug found by actually running this against
+// Postgres in Docker: purge_expired_control_plane_rows() (006/008) used
+// unqualified table names relying on the MIGRATION session's `SET
+// search_path` — which doesn't travel with the function definition, so any
+// later caller with its own default search_path (exactly how the app's own
+// connection pool calls it) got "relation ... does not exist". Explicitly
+// resetting search_path here (rather than relying on whatever a pooled
+// connection happens to have inherited) makes this test actually exercise
+// that failure mode instead of possibly passing by accident of connection
+// reuse.
+test("live: retention/partition functions resolve their tables regardless of the caller's search_path",{skip:!liveDatabaseUrl},async()=>{
+  const {Postgres}=await import("../../../src/infrastructure/postgres/client.js");
+  const {loadMigrations}=await import("../../../src/infrastructure/postgres/migrate.js");
+  const {fileURLToPath}=await import("node:url");
+  const db=new Postgres(liveDatabaseUrl!);
+  try{
+    const runner=new MigrationRunner(db);
+    await runner.apply(loadMigrations(fileURLToPath(new URL("../../../../db",import.meta.url))));
+    await db.transaction(async client=>{
+      await client.query("SET search_path TO public");
+      await client.query("SELECT bapc_security_core.ensure_month_partition(CURRENT_DATE)");
+      await client.query("SELECT bapc_security_core.drop_expired_event_partitions(120)");
+      const purged=await client.query("SELECT * FROM bapc_security_core.purge_expired_control_plane_rows()");
+      assert.equal(purged.rows.length,1);
+      assert.ok("idempotency_deleted" in purged.rows[0]!);
+    });
   }finally{
     await db.close();
   }
