@@ -59,9 +59,15 @@ This is a strict-TypeScript control plane with:
   policy and JIT gating, returning an HMAC-signed `AccessDecision` — looking
   up device/node state server-side rather than trusting it from the request.
 - **Trust Core**: real X.509 issuance (`node-forge`) with the actual private
-  key held behind a pluggable async signer — the same code path works for
-  the development in-memory key provider here and a real HSM/KMS in
-  production. See `runbooks/root-ca-ceremony.md` for the real ceremony.
+  key held behind a pluggable async signer. Node enrollment requires a real
+  self-signed PKCS#10 CSR (proof of possession) rather than reusing the
+  WireGuard key, which is a different, incompatible key type. Signing runs
+  against a real AWS KMS asymmetric key when `AWS_KMS_INTERMEDIATE_KEY_ID` is
+  configured (`services/trust-core/aws-kms-key-provider.ts`) — genuine, wired
+  code, not a stub, gated only on an AWS account existing yet — and falls
+  back to an ephemeral CA shared across every process via Postgres
+  (`dev_trust_anchor` table) otherwise. See `runbooks/root-ca-ceremony.md`
+  for the dual-control root-key ceremony this doesn't replace.
 - **Network plane**: real Linux (`wg`/`ip`/`nft`) and Windows
   (`wireguard.exe` + a PowerShell helper) platform adapters, a real UDP
   blind relay, and a real minimal SOCKS5 egress proxy. Both adapters also
@@ -83,10 +89,13 @@ This is a strict-TypeScript control plane with:
 
 **What's still explicitly out of scope** (requires accounts, hardware, or a
 native platform SDK this session cannot provide — see
-`docs/UNIVERSAL-FINAL-AUDIT.md` for the full list): real HSM/KMS custody of
-production keys, an Apple NetworkExtension client (macOS/iOS/iPadOS — see
-`native/apple/adapter.ts`), signed/notarized installers, live multi-region
-relay/egress hosting, and an independent penetration test.
+`docs/UNIVERSAL-FINAL-AUDIT.md` for the full list): a dual-control root-key
+ceremony on an air-gapped HSM (AWS KMS-backed intermediate signing is real
+and wired — see Trust Core above — but that's a single cloud account, not an
+air-gapped HSM under multi-party physical custody), an Apple NetworkExtension
+client (macOS/iOS/iPadOS — see `native/apple/adapter.ts`), signed/notarized
+installers, live multi-region relay/egress hosting, and an independent
+penetration test.
 
 The original build specifications and code packets this repository was
 reconstructed from are archived under `docs/build-source/`.

@@ -36,7 +36,11 @@ output rather than implying otherwise.
 The script prints this list itself on every run; it is reproduced here for
 reference:
 
-- Root/intermediate CA generated on a real HSM under dual control.
+- A dual-control root-key ceremony on a real, air-gapped HSM. (AWS KMS-backed
+  intermediate signing is real and wired — `services/trust-core/trust-anchor.ts`
+  — when `AWS_KMS_INTERMEDIATE_KEY_ID` is set; that's a single cloud account's
+  key, not an air-gapped HSM under multi-party physical custody, which is
+  what this item still requires.)
 - Native Linux/Windows adapters exercised on a real elevated host with
   WireGuard/nftables/WFP actually installed.
 - An Apple NetworkExtension client, built and signed under an Apple

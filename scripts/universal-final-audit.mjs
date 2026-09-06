@@ -91,7 +91,7 @@ for (const r of results) {
 
 console.log("\nNOT COVERED by this script (requires a live deployment, hardware, or a third party):");
 for (const item of [
-  "Root/intermediate CA generated on real HSM under dual control (runbooks/root-ca-ceremony.md)",
+  "Dual-control root-key ceremony on a real, air-gapped HSM (runbooks/root-ca-ceremony.md) — AWS KMS-backed intermediate signing is real and wired when AWS_KMS_INTERMEDIATE_KEY_ID is set, but that's a single cloud account, not an air-gapped HSM under multi-party physical custody",
   "Native Linux/Windows adapters exercised on a real elevated host with WireGuard/nftables/WFP installed",
   "Apple NetworkExtension client built and signed under an Apple Developer Program account",
   "Signed, notarized/authenticode installers for every platform",

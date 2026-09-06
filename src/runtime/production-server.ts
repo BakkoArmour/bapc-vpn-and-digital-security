@@ -11,7 +11,7 @@ import {JitService} from "../application/jit.js";
 import {SocService} from "../application/soc.js";
 import {ThreatResponseService} from "../application/threat-response.js";
 import {RandomIds,SystemClock} from "../infrastructure/memory.js";
-import {InMemoryEnforcer, DevelopmentCertificateIssuer, NoopThreatSink} from "../infrastructure/adapters.js";
+import {InMemoryEnforcer, NoopThreatSink} from "../infrastructure/adapters.js";
 import {HeartbeatService} from "../application/heartbeat.js";
 import {PolicyDecisionService} from "../application/policy.js";
 import {HmacDecisionSigner} from "../infrastructure/hmac-decision-signer.js";
@@ -21,7 +21,10 @@ import {PgCommandQueue} from "../../services/mesh-controller/pg-command-queue.js
 import {SecuritySocBackend} from "../../apps/security-soc/backend.js";
 import {PgSocData} from "../../apps/security-soc/pg-soc-data.js";
 import {PgSocActions} from "../../apps/security-soc/pg-soc-actions.js";
-import {createSelfSignedDevCa} from "../../services/trust-core/dev-self-signed.js";
+import {loadTrustAnchor} from "../../services/trust-core/trust-anchor.js";
+import {TrustCoreIssuer} from "../../services/trust-core/issuer.js";
+import {ForgeX509Builder} from "../../services/trust-core/x509-forge.js";
+import {TrustCoreCertificateIssuer} from "../../services/trust-core/trust-core-certificate-issuer.js";
 import {ForgeCrlBuilder} from "../../services/trust-core/crl-builder.js";
 import {PgCertificateStore} from "../../services/trust-core/pg-certificate-store.js";
 import type {NetworkPolicy} from "../domain/types.js";
@@ -34,14 +37,27 @@ const ids=new RandomIds(),clock=new SystemClock();
 const jit=new JitService(repo,ids,clock,bus);
 const soc=new SocService(repo,repo,repo,repo,repo,clock);
 
-// InMemoryEnforcer and the development certificate issuer/threat sink below are
-// placeholders for the real PlatformAdapter-bound enforcer, TrustCoreIssuer and
-// SIEM/ThreatSink integration. See docs/CODE-ADDENDUM-INTEGRATION.md.
+// InMemoryEnforcer below is a placeholder for the real PlatformAdapter-bound
+// enforcer. See docs/CODE-ADDENDUM-INTEGRATION.md.
 const enforcer=new InMemoryEnforcer();
 const ecosystem=new EcosystemIntegrationService(config.ecosystemSecrets,bus);
 const clearance=new DiagnosticsClearanceVerifier(ecosystem);
+
+// The real X.509 issuer: signs with an AWS KMS key when
+// AWS_KMS_INTERMEDIATE_KEY_ID is configured, otherwise an ephemeral CA shared
+// (via Postgres) with the mesh-grpc process's enrollment path — see
+// trust-anchor.ts and [[user-build-everything-coming-soon]]. This replaces
+// DevelopmentCertificateIssuer, which returned the literal string
+// "DEVELOPMENT-ONLY" as the "certificate" and was never actually connected
+// to TrustCoreIssuer/ForgeX509Builder despite both being fully built.
+const certificateStore=new PgCertificateStore(db);
+const trustAnchor=await loadTrustAnchor(db);
+const certificateIssuer=new TrustCoreCertificateIssuer(new TrustCoreIssuer(
+  trustAnchor.keys,certificateStore,new ForgeX509Builder(),
+  {id:trustAnchor.issuerId,certificatePem:trustAnchor.certificatePem,keyReference:trustAnchor.keyReference,algorithm:trustAnchor.algorithm}
+));
 const threatResponse=new ThreatResponseService(
-  repo,repo,repo,repo,enforcer,new DevelopmentCertificateIssuer(),bus,new NoopThreatSink(),clearance
+  repo,repo,repo,repo,enforcer,certificateIssuer,bus,new NoopThreatSink(),clearance
 );
 
 const heartbeats=new HeartbeatService(repo,repo,bus,clock);
@@ -56,12 +72,7 @@ const socBackend=new SecuritySocBackend(
   new PgSocData(db),new PgSocActions(threatResponse,repo,repo,enforcer,bus,ids,clock)
 );
 
-// Development-only CRL issuer — see runbooks/root-ca-ceremony.md. Production
-// must sign the CRL with the same HSM-backed intermediate that
-// TrustCoreIssuer issues node certificates with, not this ephemeral key.
-const devCa=await createSelfSignedDevCa("BAPC Dev CRL Issuer","production-server-crl-issuer");
 const crlBuilder=new ForgeCrlBuilder();
-const certificateStore=new PgCertificateStore(db);
 
 const guard=new HmacBearerGuard(config.controlApiTokenSecret);
 const router=new RestRouter(guard,new PgIdempotencyStore(db),true,new PgReplayStore(db));
@@ -109,9 +120,9 @@ router.add("GET","/api/v1/certificates/crl",[],async()=>{
   const revoked=await certificateStore.listRevoked();
   const now=clock.now();
   const body=await crlBuilder.build({
-    issuerCertificatePem:devCa.certificatePem,
+    issuerCertificatePem:trustAnchor.certificatePem,
     thisUpdate:now,nextUpdate:new Date(now.getTime()+24*3_600_000),
-    revoked,sign:tbs=>devCa.keys.sign(devCa.keyReference,"RS256",tbs)
+    revoked,sign:tbs=>trustAnchor.keys.sign(trustAnchor.keyReference,"RS256",tbs)
   });
   return {contentType:"application/pkix-crl",body};
 },{public:true,raw:true,rateLimit:{limit:120,windowMs:60_000}});

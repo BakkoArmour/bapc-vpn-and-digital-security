@@ -1,7 +1,14 @@
 syntax = "proto3";
 package bapc.security.v1;
 service MeshOrchestrationService { rpc RegisterNode(NodeRegistrationRequest) returns (NodeRegistrationResponse); rpc StreamHeartbeat(stream NodeHeartbeat) returns (stream ControllerCommand); rpc RotatePeerKey(KeyRotationRequest) returns (KeyRotationResponse); }
-message NodeRegistrationRequest { string hardware_uuid=1; string wireguard_public_key=2; bytes hardware_attestation_quote=3; string os_signature=4; }
+// csr_der: a PKCS#10 CertificationRequest, DER-encoded, self-signed by a
+// keypair the node generates and never transmits — proof of possession for
+// the identity/mTLS certificate the control plane issues back. Deliberately
+// separate from wireguard_public_key: WireGuard's Curve25519 key is for VPN
+// tunnel key agreement only and cannot be used as an X.509 subject public
+// key (this control plane's CA issues RSA-signed certificates). Required:
+// without it there is no compatible key to certify.
+message NodeRegistrationRequest { string hardware_uuid=1; string wireguard_public_key=2; bytes hardware_attestation_quote=3; string os_signature=4; bytes csr_der=5; }
 message NodeRegistrationResponse { string internal_ipv4=1; string internal_ipv6=2; repeated PeerConfig initial_peers=3; bytes signed_client_certificate=4; string assigned_zone=5; }
 message PeerConfig { string public_key=1; string endpoint=2; repeated string allowed_ips=3; int32 keepalive_interval=4; }
 message NodeHeartbeat { string node_id=1; int64 timestamp=2; bytes posture_hash=3; int64 bytes_transmitted=4; int64 bytes_received=5; }

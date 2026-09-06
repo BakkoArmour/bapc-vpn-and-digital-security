@@ -20,6 +20,19 @@ export class DevKeyProvider implements ProtectedKeyProvider {
     return pki.publicKeyToPem(pair.publicKey);
   }
 
+  // Reconstructs a previously-generated dev key from its exported PEM (see
+  // exportPrivateKeyPemForDevOnly) so a multi-process deployment (one
+  // ephemeral CA shared by the control-api and mesh-grpc containers, say)
+  // doesn't mint a different, mutually-unverifiable CA per process. Dev-only,
+  // same as the rest of this class — a real deployment loads keys from an
+  // HSM/KMS instead, never from a stored PEM.
+  importPrivateKeyPem(keyReference:string,privateKeyPem:string):string{
+    const privateKey=pki.privateKeyFromPem(privateKeyPem);
+    const publicKey=pki.setRsaPublicKey(privateKey.n,privateKey.e);
+    this.keys.set(keyReference,{privateKey,publicKey});
+    return pki.publicKeyToPem(publicKey);
+  }
+
   async sign(keyReference:string,algorithm:"ES256"|"RS256",payload:Buffer):Promise<Buffer>{
     if(algorithm!=="RS256")throw new Error(`DevKeyProvider only supports RS256 (got ${algorithm})`);
     const pair=this.keys.get(keyReference);

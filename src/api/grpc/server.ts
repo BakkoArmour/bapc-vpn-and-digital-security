@@ -2,6 +2,7 @@ import {fileURLToPath} from "node:url";
 import {dirname, join} from "node:path";
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
+import forge from "node-forge";
 import {EnrollmentService} from "../../application/enrollment.js";
 import type {NodeRepository} from "../../ports/repositories.js";
 import type {Platform} from "../../domain/types.js";
@@ -20,6 +21,24 @@ export interface GrpcMeshDeps {
   keyRotation:KeyRotationLedger;
   meshController:MeshController;
 }
+
+// Extracts and verifies the node's proof-of-possession CSR: node-forge's
+// csr.verify() checks the CSR's self-signature against its own embedded
+// public key, confirming the node holds the matching private key without
+// that key ever leaving the node or crossing this RPC. See mesh.proto's
+// csr_der field comment for why this can't just reuse wireguard_public_key.
+const publicKeyPemFromCsrDer=(csrDer:Uint8Array):string=>{
+  if(csrDer.length===0)throw new Error("csr_der is required: submit a self-signed PKCS#10 CSR to obtain a certificate");
+  let csr:forge.pki.CertificateSigningRequest;
+  try{
+    const asn1=forge.asn1.fromDer(forge.util.createBuffer(Buffer.from(csrDer).toString("binary")));
+    csr=forge.pki.certificationRequestFromAsn1(asn1);
+  }catch{
+    throw new Error("csr_der could not be parsed as a PKCS#10 CertificationRequest");
+  }
+  if(!csr.verify())throw new Error("CSR signature does not verify against its own embedded public key");
+  return forge.pki.publicKeyToPem(csr.publicKey!);
+};
 
 const detectPlatform=(osSignature:string):Platform=>{
   const s=osSignature.toLowerCase();
@@ -50,12 +69,14 @@ export const buildMeshGrpcServer=(deps:GrpcMeshDeps):grpc.Server=>{
         });
         const lease=await allocator.next();
         const platform=detectPlatform(String(req.osSignature??""));
+        const attestationPublicKey=publicKeyPemFromCsrDer(new Uint8Array(req.csrDer??[]));
         const result=await deps.enrollment.register({
           hostname:`node-${String(req.hardwareUuid).slice(0,8)}`,
           hardwareId:String(req.hardwareUuid),
           platform,
           osVersion:String(req.osSignature??"unknown"),
           attestationQuote:new Uint8Array(req.hardwareAttestationQuote??[]),
+          attestationPublicKey,
           wireGuardPublicKey:String(req.wireguardPublicKey),
           internalIpv4:lease.ipv4,
           internalIpv6:lease.ipv6,

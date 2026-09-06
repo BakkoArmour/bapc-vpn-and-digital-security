@@ -4,21 +4,35 @@ import {Postgres} from "../infrastructure/postgres/client.js";
 import {PgRepositories} from "../infrastructure/postgres/repositories.js";
 import {TransactionalOutbox} from "../infrastructure/postgres/outbox.js";
 import {RandomIds, SystemClock} from "../infrastructure/memory.js";
-import {AllowAttestation, DevelopmentCertificateIssuer, NoopPeerDistributor} from "../infrastructure/adapters.js";
+import {AllowAttestation, NoopPeerDistributor} from "../infrastructure/adapters.js";
 import {EnrollmentService} from "../application/enrollment.js";
 import {MeshController} from "../../services/mesh-controller/controller.js";
 import {buildMeshGrpcServer, InMemoryKeyRotationLedger, LoggingMeshCommandSink} from "../api/grpc/server.js";
+import {loadTrustAnchor} from "../../services/trust-core/trust-anchor.js";
+import {TrustCoreIssuer} from "../../services/trust-core/issuer.js";
+import {ForgeX509Builder} from "../../services/trust-core/x509-forge.js";
+import {TrustCoreCertificateIssuer} from "../../services/trust-core/trust-core-certificate-issuer.js";
+import {PgCertificateStore} from "../../services/trust-core/pg-certificate-store.js";
 
 const config=loadConfig();
 const db=new Postgres(config.databaseUrl);
 const repo=new PgRepositories(db);
 void new TransactionalOutbox(db); // reserved for future signed enrollment events over the outbox
 
-// Development-only attestation/certificate/peer adapters. Production deployments
-// MUST replace these with hardware attestation, an HSM-backed TrustCoreIssuer and
-// a real PeerDistributor bound to the endpoint agent command channel.
+// Real X.509 issuance for node enrollment — shares the same AWS KMS key or
+// Postgres-persisted ephemeral CA that production-server.ts's CRL/threat-
+// response paths use (see trust-anchor.ts), so certificates issued here
+// chain-verify against that CRL and against each other. AllowAttestation and
+// NoopPeerDistributor remain development-only: production deployments still
+// need real hardware attestation and a PeerDistributor bound to the endpoint
+// agent command channel.
+const trustAnchor=await loadTrustAnchor(db);
+const certificateIssuer=new TrustCoreCertificateIssuer(new TrustCoreIssuer(
+  trustAnchor.keys,new PgCertificateStore(db),new ForgeX509Builder(),
+  {id:trustAnchor.issuerId,certificatePem:trustAnchor.certificatePem,keyReference:trustAnchor.keyReference,algorithm:trustAnchor.algorithm}
+));
 const enrollment=new EnrollmentService(
-  repo,repo,repo,new AllowAttestation(),new DevelopmentCertificateIssuer(),
+  repo,repo,repo,new AllowAttestation(),certificateIssuer,
   new NoopPeerDistributor(),new RandomIds(),new SystemClock()
 );
 
