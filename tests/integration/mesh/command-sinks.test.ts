@@ -71,6 +71,24 @@ test("PgPolicyEnforcer.stage broadcasts a real APPLY_FIREWALL command to every a
   }
 });
 
+// PolicyCompiler existed fully built and tested with no caller anywhere —
+// an invalid policy would previously be broadcast to every node as-is,
+// only to fail unpredictably inside whatever native nft/WFP call actually
+// tried to apply it. This proves stage() now rejects it before anything is
+// ever sent.
+test("PgPolicyEnforcer.stage rejects an invalid policy before broadcasting anything",async()=>{
+  const queue=new FakeCommandQueue();
+  const nodes=new FakeNodeRepository([testNode("n1")]);
+  const enforcer=new PgPolicyEnforcer(queue as any,nodes as any);
+  const invalidPortPolicy:NetworkPolicy={
+    id:"p1",name:"bad-port",sourceZones:["ZONE_DEV"],destinationZones:["ZONE_PROD_APP"],
+    protocols:["TCP"],destinationPorts:[99999],action:"DENY",requiredRoles:[],requiresJit:false,
+    priority:10,version:1,active:true
+  };
+  await assert.rejects(()=>enforcer.stage("commit-1",[invalidPortPolicy]),/invalid port/);
+  assert.equal(queue.enqueued.length,0);
+});
+
 test("PgPolicyEnforcer.rollback broadcasts ROLLBACK_FIREWALL to every active node",async()=>{
   const queue=new FakeCommandQueue();
   const nodes=new FakeNodeRepository([testNode("n1")]);

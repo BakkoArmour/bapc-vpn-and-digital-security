@@ -2,6 +2,7 @@ import type {NetworkPolicy} from "../domain/types.js";
 import type {PolicyEnforcer} from "../ports/infrastructure.js";
 import type {NodeRepository} from "../ports/repositories.js";
 import type {PgCommandQueue} from "../../services/mesh-controller/pg-command-queue.js";
+import {PolicyCompiler} from "../application/policy-compiler.js";
 
 const firewallRulesFor=(policies:NetworkPolicy[])=>policies.map(p=>({
   id:p.id,
@@ -33,9 +34,19 @@ const firewallRulesFor=(policies:NetworkPolicy[])=>policies.map(p=>({
 // involved), not the mesh.proto ControllerCommand.Action names.
 export class PgPolicyEnforcer implements PolicyEnforcer {
   private staged=new Map<string,NetworkPolicy[]>();
+  private compiler=new PolicyCompiler();
   constructor(private queue:PgCommandQueue,private nodes:NodeRepository){}
 
   async stage(commitId:string,policies:NetworkPolicy[]):Promise<void>{
+    // PolicyCompiler existed fully built and tested (invalid zone/port
+    // rejection) with no caller anywhere — a policy with a typo'd zone name
+    // or an out-of-range port would previously be broadcast to every node's
+    // APPLY_FIREWALL command as-is, only to fail unpredictably at whatever
+    // native nft/WFP call actually tried to apply it. This validates before
+    // anything is ever sent, using the same compiler the platform-specific
+    // (linux/windows/apple) enforcement-plan methods already assume valid
+    // input for.
+    this.compiler.compile(policies);
     this.staged.set(commitId,policies);
     const rules=firewallRulesFor(policies);
     for(const node of await this.nodes.list()){
