@@ -70,3 +70,18 @@ test("answers SERVFAIL when every upstream fails and the domain is not sinkholed
     assert.equal(response.rcode,"SERVFAIL");
   }finally{await server.stop();}
 });
+
+test("DNS resolution still succeeds when the audit sink is unavailable (regression: an unguarded audit write used to fail the whole query)",async()=>{
+  const protection=new DnsProtectionService([]);
+  const failingAudit:DnsAudit={async record(){throw new Error("audit database unreachable");}};
+  const upstream:DnsUpstream={async resolve(){return [{type:"A",value:"93.184.216.34",ttl:60}];}};
+  const resolver=new SecureDnsResolver(protection,[upstream],failingAudit,"10.144.0.53");
+  const server=new BapcDnsServer(resolver);
+  await server.start(0,"127.0.0.1");
+  const port=(server.address() as any).port;
+  try{
+    const response=await query(port,"example.com");
+    assert.equal(response.rcode,"NOERROR");
+    assert.equal((response.answers[0] as any).data,"93.184.216.34");
+  }finally{await server.stop();}
+});

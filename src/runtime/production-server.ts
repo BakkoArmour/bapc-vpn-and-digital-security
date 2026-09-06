@@ -196,7 +196,15 @@ const shutdown=async(signal:string)=>{
 process.on("SIGTERM",()=>void shutdown("SIGTERM"));
 process.on("SIGINT",()=>void shutdown("SIGINT"));
 
-await db.health();
+try{
+  await db.health();
+}catch(error){
+  console.error(JSON.stringify({
+    event:"fatal",reason:"database unreachable at startup",
+    error:error instanceof Error?error.message:String(error)
+  }));
+  process.exit(1);
+}
 server.listen(config.port,config.bindHost,()=>{
   console.log(JSON.stringify({
     event:"ready",service:"bapc-vpn-security",version:"0.4.0",
