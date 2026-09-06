@@ -23,6 +23,24 @@
   .sev-INFO{color:#8b949e;}
   .err{color:#f85149;font-size:12px;}
   button.action{background:#21262d;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px;}
+
+  dialog#formDialog{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:10px;padding:0;width:420px;max-width:90vw;}
+  dialog#formDialog.wide{width:640px;}
+  dialog#formDialog::backdrop{background:rgba(0,0,0,.6);}
+  dialog#formDialog .formCard{padding:20px;display:flex;flex-direction:column;gap:12px;margin:0;border:none;}
+  dialog#formDialog h3{margin:0;font-size:15px;}
+  dialog#formDialog .formDesc{margin:0;font-size:13px;color:#8b949e;}
+  dialog#formDialog .formDesc:empty{display:none;}
+  dialog#formDialog .formBody{display:flex;flex-direction:column;gap:10px;}
+  dialog#formDialog .formField{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b949e;}
+  dialog#formDialog input,dialog#formDialog textarea,dialog#formDialog select{background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:6px 8px;border-radius:6px;font:inherit;}
+  dialog#formDialog textarea{font-family:ui-monospace,monospace;font-size:12px;resize:vertical;}
+  dialog#formDialog .formError{color:#f85149;font-size:12px;margin:0;min-height:14px;}
+  dialog#formDialog .formActions{display:flex;justify-content:flex-end;gap:8px;}
+  dialog#formDialog button{border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;}
+  dialog#formDialog .formCancel{background:#21262d;color:#e6edf3;}
+  dialog#formDialog .formSubmit{background:#238636;color:white;}
+  dialog#formDialog .formSubmit.danger{background:#da3633;}
 </style>
 </head>
 <body>
@@ -72,13 +90,116 @@
     <table id="eventsTable"><thead><tr><th>Time</th><th>Severity</th><th>Engine</th><th>Type</th><th>Description</th></tr></thead><tbody></tbody></table>
   </div>
 </main>
+
+<dialog id="formDialog">
+  <form class="formCard">
+    <h3></h3>
+    <p class="formDesc"></p>
+    <div class="formBody"></div>
+    <p class="formError"></p>
+    <div class="formActions">
+      <button type="button" class="formCancel">Cancel</button>
+      <button type="submit" class="formSubmit">Submit</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 let base = "", token = "";
 
+// Every mutating console action used to chain native window.prompt()/confirm()
+// calls: no inline validation, not stylable, blocks the main thread, and (as
+// discovered while driving this console from real browser automation) not
+// something any scripted/E2E tool can drive at all, since there's no hook to
+// answer a native dialog. This modal replaces all of them with a real form.
+function openForm({title, description, fields, confirmLabel = "Submit", danger = false, wide = false}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+
+    const dlg = document.getElementById("formDialog");
+    dlg.classList.toggle("wide", !!wide);
+    dlg.querySelector("h3").textContent = title;
+    dlg.querySelector(".formDesc").textContent = description || "";
+
+    const body = dlg.querySelector(".formBody");
+    body.innerHTML = "";
+    const errorEl = dlg.querySelector(".formError");
+    errorEl.textContent = "";
+
+    const inputs = {};
+    for (const f of fields) {
+      const wrap = document.createElement("label");
+      wrap.className = "formField";
+      const labelText = document.createElement("span");
+      labelText.textContent = f.label;
+      wrap.appendChild(labelText);
+
+      let input;
+      if (f.type === "textarea") {
+        input = document.createElement("textarea");
+        input.rows = f.rows || 4;
+      } else if (f.type === "select") {
+        input = document.createElement("select");
+        for (const opt of f.options) {
+          const o = document.createElement("option");
+          o.value = opt; o.textContent = opt;
+          input.appendChild(o);
+        }
+      } else {
+        input = document.createElement("input");
+        input.type = f.type || "text";
+      }
+      if (f.placeholder) input.placeholder = f.placeholder;
+      if (f.value !== undefined) input.value = f.value;
+      wrap.appendChild(input);
+      body.appendChild(wrap);
+      inputs[f.name] = input;
+    }
+
+    const submitBtn = dlg.querySelector(".formSubmit");
+    submitBtn.textContent = confirmLabel;
+    submitBtn.className = "formSubmit" + (danger ? " danger" : "");
+
+    const form = dlg.querySelector("form");
+    const cancelBtn = dlg.querySelector(".formCancel");
+
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const values = {};
+      for (const f of fields) values[f.name] = inputs[f.name].value;
+      for (const f of fields) {
+        const v = values[f.name];
+        if (f.minLength && v.trim().length < f.minLength) {
+          errorEl.textContent = `${f.label} must be at least ${f.minLength} characters.`;
+          return;
+        }
+        if (f.match !== undefined && v !== f.match) {
+          errorEl.textContent = f.matchError || `${f.label} does not match.`;
+          return;
+        }
+      }
+      dlg.close();
+      done(values);
+    };
+    cancelBtn.onclick = () => { dlg.close(); done(null); };
+    dlg.onclose = () => done(null);
+
+    dlg.showModal();
+    const firstInput = body.querySelector("input,textarea,select");
+    if (firstInput) firstInput.focus();
+  });
+}
+
 async function api(path, opts = {}) {
+  // Every replay-protected route (currently just emergency-lockdown) requires
+  // a fresh, single-use X-Request-Nonce header — see enforceReplayNonce in
+  // src/api/rest/replay-guard.ts. Sending one on every request is harmless
+  // (routes that aren't replay-protected simply ignore it) and means this
+  // client doesn't need to know which routes care.
   const res = await fetch(base + path, {
     ...opts,
-    headers: { "authorization": `Bearer ${token}`, "content-type": "application/json", ...(opts.headers || {}) }
+    headers: { "authorization": `Bearer ${token}`, "content-type": "application/json", "x-request-nonce": crypto.randomUUID(), ...(opts.headers || {}) }
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.error?.message || `request failed (${res.status})`);
@@ -131,9 +252,14 @@ async function refresh() {
         catch (err) { setStatus(err.message, true); }
       }));
       actions.appendChild(actionButton("Terminate", async () => {
-        const reason = prompt("Termination reason:", "terminated by SOC operator");
-        if (reason === null) return;
-        try { await api(`/api/v1/jit/${g.grant_id}/terminate`, { method: "POST", body: JSON.stringify({ reason }) }); refresh(); }
+        const values = await openForm({
+          title: "Terminate JIT Grant",
+          danger: true,
+          confirmLabel: "Terminate",
+          fields: [{name: "reason", label: "Termination reason", type: "text", value: "terminated by SOC operator", minLength: 1}]
+        });
+        if (!values) return;
+        try { await api(`/api/v1/jit/${g.grant_id}/terminate`, { method: "POST", body: JSON.stringify({ reason: values.reason }) }); refresh(); }
         catch (err) { setStatus(err.message, true); }
       }));
       jitBody.appendChild(row([
@@ -147,10 +273,15 @@ async function refresh() {
     for (const p of full.policies) {
       const editBtn = actionButton("Edit JSON", async () => {
         const current = JSON.stringify(p, null, 2);
-        const edited = prompt("Edit policy JSON, then submit (PUT /api/v1/policies/:id):", current);
-        if (!edited) return;
+        const values = await openForm({
+          title: `Edit Policy — ${p.name}`,
+          confirmLabel: "Save",
+          wide: true,
+          fields: [{name: "json", label: "Policy JSON (PUT /api/v1/policies/:id)", type: "textarea", rows: 16, value: current}]
+        });
+        if (!values) return;
         try {
-          const body = JSON.parse(edited);
+          const body = JSON.parse(values.json);
           await api(`/api/v1/policies/${p.policy_id}`, { method: "PUT", body: JSON.stringify(body) });
           refresh();
         } catch (err) { setStatus(err.message, true); }
@@ -183,18 +314,27 @@ async function refresh() {
       const actions = document.createElement("span");
       actions.style.display = "flex"; actions.style.gap = "6px";
       actions.appendChild(actionButton("Quarantine", async () => {
-        const reason = prompt("Quarantine reason (min 12 chars):");
-        if (!reason) return;
+        const values = await openForm({
+          title: "Quarantine Node",
+          danger: true,
+          confirmLabel: "Quarantine",
+          fields: [{name: "reason", label: "Quarantine reason", type: "text", minLength: 12}]
+        });
+        if (!values) return;
         try {
-          await api(`/api/v1/nodes/${n.id}/quarantine`, { method: "POST", body: JSON.stringify({ reason }) });
+          await api(`/api/v1/nodes/${n.id}/quarantine`, { method: "POST", body: JSON.stringify({ reason: values.reason }) });
           refresh();
         } catch (err) { setStatus(err.message, true); }
       }));
       actions.appendChild(actionButton("Restore", async () => {
-        const clearanceToken = prompt("Signed Diagnostics clearance token (diag-clearance:...):");
-        if (!clearanceToken) return;
+        const values = await openForm({
+          title: "Restore Node",
+          confirmLabel: "Restore",
+          fields: [{name: "clearanceToken", label: "Signed Diagnostics clearance token (diag-clearance:...)", type: "text", minLength: 1}]
+        });
+        if (!values) return;
         try {
-          await api(`/api/v1/nodes/${n.id}/restore`, { method: "POST", body: JSON.stringify({ clearanceToken }) });
+          await api(`/api/v1/nodes/${n.id}/restore`, { method: "POST", body: JSON.stringify({ clearanceToken: values.clearanceToken }) });
           refresh();
         } catch (err) { setStatus(err.message, true); }
       }));
@@ -222,13 +362,19 @@ document.getElementById("connect").onclick = () => {
 };
 
 document.getElementById("lockdown").onclick = async () => {
-  if (!confirm("This isolates every active node and terminates every active JIT grant across the ecosystem. Continue?")) return;
-  const reason = prompt("Detailed emergency reason (min 20 characters):");
-  if (!reason) return;
-  const confirmation = prompt('Type LOCKDOWN to confirm:');
-  if (confirmation !== "LOCKDOWN") { setStatus("Lockdown cancelled: confirmation text did not match.", true); return; }
+  const values = await openForm({
+    title: "Emergency Lockdown",
+    description: "This isolates every active node and terminates every active JIT grant across the entire ecosystem.",
+    danger: true,
+    confirmLabel: "Execute Lockdown",
+    fields: [
+      {name: "reason", label: "Detailed emergency reason", type: "textarea", minLength: 20},
+      {name: "confirmation", label: "Type LOCKDOWN to confirm", type: "text", match: "LOCKDOWN", matchError: "You must type LOCKDOWN exactly to confirm."}
+    ]
+  });
+  if (!values) return;
   try {
-    const result = await api("/api/v1/soc/emergency-lockdown", { method: "POST", body: JSON.stringify({ reason, confirmation }) });
+    const result = await api("/api/v1/soc/emergency-lockdown", { method: "POST", body: JSON.stringify({ reason: values.reason, confirmation: values.confirmation }) });
     setStatus(`Lockdown executed (scope: ${result.scope}).`, false);
     refresh();
   } catch (err) {
@@ -237,15 +383,22 @@ document.getElementById("lockdown").onclick = async () => {
 };
 
 document.getElementById("newJit").onclick = async () => {
-  const targetResource = prompt("Target resource (e.g. a hostname or service name):");
-  if (!targetResource) return;
-  const targetZone = prompt("Target zone (e.g. ZONE_PROD_DATA, ZONE_PROD_APP, ZONE_STAGING, ZONE_DEV, ZONE_ADMIN_MGMT):");
-  if (!targetZone) return;
-  const durationMinutes = Number(prompt("Duration in minutes (15, 30 or 60):", "15"));
-  const justification = prompt("Justification (min 12 characters):");
-  if (!justification) return;
+  const values = await openForm({
+    title: "Request JIT Access",
+    confirmLabel: "Submit Request",
+    fields: [
+      {name: "targetResource", label: "Target resource (hostname or service name)", type: "text", minLength: 1},
+      {name: "targetZone", label: "Target zone", type: "select", options: ["ZONE_PROD_DATA", "ZONE_PROD_APP", "ZONE_STAGING", "ZONE_DEV", "ZONE_ADMIN_MGMT"]},
+      {name: "durationMinutes", label: "Duration in minutes", type: "select", options: ["15", "30", "60"], value: "15"},
+      {name: "justification", label: "Justification", type: "textarea", minLength: 12}
+    ]
+  });
+  if (!values) return;
   try {
-    await api("/api/v1/jit", { method: "POST", body: JSON.stringify({ targetResource, targetZone, durationMinutes, justification }) });
+    await api("/api/v1/jit", { method: "POST", body: JSON.stringify({
+      targetResource: values.targetResource, targetZone: values.targetZone,
+      durationMinutes: Number(values.durationMinutes), justification: values.justification
+    }) });
     setStatus("JIT request submitted.", false);
     refresh();
   } catch (err) { setStatus(err.message, true); }
