@@ -178,7 +178,14 @@ const nodeReconciliation=new NodeReconciliationService(repo,repo,desiredStateSto
 const guard=new HmacBearerGuard(config.controlApiTokenSecret);
 const router=new RestRouter(guard,new PgIdempotencyStore(db),true,new PgReplayStore(db));
 
-router.add("GET","/api/v1/status",[],async({claims})=>({
+// Was previously registered with an empty roles array and no explicit
+// {public:true} — HmacBearerGuard.verify still required a validly-signed,
+// unexpired bearer token (so this was never actually reachable
+// unauthenticated), but any authenticated caller could reach it regardless
+// of role, which is indistinguishable from a real authorization gap without
+// reading the guard's own role-check short-circuit. security-read matches
+// every other read-only diagnostic route in this file.
+router.add("GET","/api/v1/status",["security-read"],async({claims})=>({
   service:"bapc-vpn-security",version:"0.4.0",subject:claims.sub,
   database:await db.health(),environment:config.environment
 }));
