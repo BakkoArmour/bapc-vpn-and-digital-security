@@ -1,30 +1,34 @@
 import type {ThreatEngine, ThreatSignal} from "./engine.js";
+import {InMemoryThreatSignalStore, type ThreatSignalStore} from "./threat-signal-store.js";
 
 export interface DismissalPort {
   record(nodeId:string,dismissedBy:string,signalCount:number):Promise<void>;
 }
+
+const UNATTRIBUTED="__unattributed__";
 
 // Individual signals (a failed auth, a scan hit, an odd packet-rate sample)
 // are rarely dangerous alone — ThreatEngine.evaluate scores whatever batch
 // it's handed, so correlating repeated low-confidence signals over TIME into
 // one growing batch per node is what turns "5 failed logins in 2 minutes"
 // into an actual CRITICAL evaluation instead of 5 separate INFO results.
+//
+// The sliding window itself is delegated to `store` (threat-signal-store.ts)
+// rather than kept in a local Map — it defaults to an in-memory store (so
+// every existing caller/test that never cared about persistence keeps
+// working unchanged), but production wires up PgThreatSignalStore so a
+// control-plane restart doesn't silently erase a node's un-escalated
+// signal history along with it.
 export class ThreatCorrelator {
-  private windows=new Map<string,ThreatSignal[]>();
-  constructor(private engine:ThreatEngine,private windowMs=300_000,private dismissals?:DismissalPort){}
-
-  private prune(nodeId:string,now:number){
-    const kept=(this.windows.get(nodeId)??[]).filter(s=>now-s.at.getTime()<this.windowMs);
-    if(kept.length)this.windows.set(nodeId,kept); else this.windows.delete(nodeId);
-    return kept;
-  }
+  constructor(
+    private engine:ThreatEngine,private windowMs=300_000,private dismissals?:DismissalPort,
+    private store:ThreatSignalStore=new InMemoryThreatSignalStore()
+  ){}
 
   async ingest(signal:ThreatSignal){
-    const nodeId=signal.nodeId??"__unattributed__";
-    const now=signal.at.getTime();
-    const kept=this.prune(nodeId,now);
-    kept.push(signal);
-    this.windows.set(nodeId,kept);
+    const nodeKey=signal.nodeId??UNATTRIBUTED;
+    await this.store.record(nodeKey,signal);
+    const kept=await this.store.window(nodeKey,signal.at.getTime()-this.windowMs);
     return this.engine.evaluate(kept);
   }
 
@@ -33,13 +37,12 @@ export class ThreatCorrelator {
   // signals stop contributing to future scores, and the dismissal itself is
   // recorded for audit/tuning (not silently discarded).
   async dismiss(nodeId:string,dismissedBy:string){
-    const count=(this.windows.get(nodeId)??[]).length;
-    this.windows.delete(nodeId);
+    const count=await this.store.clear(nodeId);
     await this.dismissals?.record(nodeId,dismissedBy,count);
     return {clearedSignals:count};
   }
 
-  activeSignalCount(nodeId:string,now=new Date()){
-    return this.prune(nodeId,now.getTime()).length;
+  async activeSignalCount(nodeId:string,now=new Date()){
+    return (await this.store.window(nodeId,now.getTime()-this.windowMs)).length;
   }
 }

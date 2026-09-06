@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {ThreatEngine} from "../../../services/threat-engine/engine.js";
 import {ThreatCorrelator} from "../../../services/threat-engine/correlator.js";
+import {InMemoryThreatSignalStore} from "../../../services/threat-engine/threat-signal-store.js";
 
 const buildEngine=(actions:string[])=>new ThreatEngine({
   reauthenticate:async()=>{actions.push("reauth");},
@@ -43,10 +44,10 @@ test("dismiss clears the window and records the dismissal",async()=>{
   });
   await correlator.ingest({nodeId:"n1",kind:"scan",confidence:1,weight:20,at:new Date(),metadata:{}});
   await correlator.ingest({nodeId:"n1",kind:"scan",confidence:1,weight:20,at:new Date(),metadata:{}});
-  assert.equal(correlator.activeSignalCount("n1"),2);
+  assert.equal(await correlator.activeSignalCount("n1"),2);
   const outcome=await correlator.dismiss("n1","security-analyst-1");
   assert.equal(outcome.clearedSignals,2);
-  assert.equal(correlator.activeSignalCount("n1"),0);
+  assert.equal(await correlator.activeSignalCount("n1"),0);
   assert.deepEqual(dismissed,[{nodeId:"n1",dismissedBy:"security-analyst-1",signalCount:2}]);
 });
 
@@ -55,4 +56,25 @@ test("different nodes have independent correlation windows",async()=>{
   await correlator.ingest({nodeId:"n1",kind:"scan",confidence:1,weight:50,at:new Date(),metadata:{}});
   const resultN2=await correlator.ingest({nodeId:"n2",kind:"scan",confidence:1,weight:5,at:new Date(),metadata:{}});
   assert.equal(resultN2.score,5);
+});
+
+// The whole point of accepting a ThreatSignalStore (threat-signal-store.ts)
+// instead of keeping a private Map: the sliding window's state lives in the
+// store, not the correlator instance. A brand new ThreatCorrelator built
+// against the SAME store (the real-world equivalent of a control-plane
+// process restarting, with PgThreatSignalStore's Postgres table surviving
+// the restart) still sees signals accumulated before it existed.
+test("a signal ingested by one ThreatCorrelator instance still contributes to a later evaluation from a fresh instance sharing the same store",async()=>{
+  const store=new InMemoryThreatSignalStore();
+  const beforeRestart=new ThreatCorrelator(buildEngine([]),300_000,undefined,store);
+  await beforeRestart.ingest({nodeId:"n1",kind:"failed_auth",confidence:1,weight:60,at:new Date(),metadata:{}});
+
+  const actionsAfterRestart:string[]=[];
+  const afterRestart=new ThreatCorrelator(buildEngine(actionsAfterRestart),300_000,undefined,store);
+  const result=await afterRestart.ingest({nodeId:"n1",kind:"failed_auth",confidence:1,weight:20,at:new Date(),metadata:{}});
+  // 60 (pre-restart) + 20 (post-restart) = 80 -> CRITICAL. If the restart had
+  // erased the window, this would score only 20 and stay INFO.
+  assert.equal(result.score,80);
+  assert.equal(result.severity,"CRITICAL");
+  assert.ok(actionsAfterRestart.includes("isolate"));
 });

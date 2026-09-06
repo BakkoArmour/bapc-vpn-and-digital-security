@@ -41,6 +41,7 @@ import {HttpOobChannel} from "../../services/oob-controller/http-channel.js";
 import {PgRecoveryStore} from "../../services/oob-controller/pg-recovery-store.js";
 import {ThreatEngine, type ThreatSignal} from "../../services/threat-engine/engine.js";
 import {ThreatCorrelator} from "../../services/threat-engine/correlator.js";
+import {PgThreatSignalStore} from "../../services/threat-engine/pg-threat-signal-store.js";
 import {PgThreatActionPort} from "../../services/threat-engine/pg-threat-action-port.js";
 import {PgIncidentPort} from "../../services/threat-engine/pg-incident-port.js";
 import {EgressSelector} from "../../services/egress/selector.js";
@@ -112,9 +113,15 @@ const threatResponse=new ThreatResponseService(
 const threatActionPort=new PgThreatActionPort(repo,repo,enforcer,certificateStore,commandQueue,bus);
 const incidentPort=new PgIncidentPort(db,repo,ids,clock);
 const threatEngine=new ThreatEngine(threatActionPort,incidentPort);
-const threatCorrelator=new ThreatCorrelator(threatEngine,300_000,{
+const THREAT_CORRELATION_WINDOW_MS=300_000;
+// PgThreatSignalStore (not the default in-memory one): without it, every
+// control-plane restart silently erased any un-escalated signal history a
+// node had built up, resetting its correlation window for free — see
+// threat-signal-store.ts / db/017_threat_signal_window.sql.
+const threatSignalStore=new PgThreatSignalStore(db);
+const threatCorrelator=new ThreatCorrelator(threatEngine,THREAT_CORRELATION_WINDOW_MS,{
   record:async(nodeId,dismissedBy,signalCount)=>{await audit.record(dismissedBy,"THREAT_DISMISSED",nodeId,{signalCount});}
-});
+},threatSignalStore);
 
 // OobController/PgRecoveryStore/HttpOobChannel existed fully built and
 // tested with no caller anywhere — docs/INCIDENT-RESPONSE-RUNBOOK.md's
@@ -405,6 +412,14 @@ router.add("POST","/api/v1/threats/signal",["security-agent"],async({body})=>{
 
 router.add("POST","/api/v1/threats/:nodeId/dismiss",["security-approver"],async({claims,params})=>
   threatCorrelator.dismiss(params.nodeId!,claims.sub)
+);
+
+// The SOC console's Threat Signals panel (apps/security-soc) needs to know
+// which nodes currently have an active, un-escalated correlation window
+// without polling every enrolled node's activeSignalCount individually —
+// PgThreatSignalStore.activeWindows had no route calling it before this.
+router.add("GET","/api/v1/threats/active",["security-read"],async()=>
+  threatSignalStore.activeWindows(clock.now().getTime()-THREAT_CORRELATION_WINDOW_MS)
 );
 
 router.add("POST","/api/v1/agent/commands/:id/ack",["security-agent"],async({params,body})=>{
