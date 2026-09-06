@@ -77,23 +77,25 @@ export class LinuxPlatformAdapter implements PlatformAdapter, AgentPlatform {
     }
   }
 
-  // `wg set <iface> peer ...` updates/adds each named peer's config in place
-  // and, critically, never touches `private-key` when that flag is omitted —
-  // unlike applyWireGuard, this never receives or writes any key material for
-  // this node itself. Does not remove peers absent from `peers`: full
-  // stale-peer teardown needs `wg syncconf` against a complete peer set,
-  // which is a separate concern from delivering a topology update.
+  // `wg syncconf <iface> <file>` replaces the ENTIRE peer set with exactly
+  // what's in the file's [Peer] sections — adding new peers, updating
+  // changed ones, and removing any peer not listed, in one atomic call.
+  // Critically, the file has no [Interface] section, so private-key/
+  // listen-port are never touched: this never receives or writes any key
+  // material for this node itself, the same guarantee `wg set` gave, but
+  // without `wg set`'s limitation of only ever adding/updating peers.
   async applyPeers(peers:Array<{publicKey:string;endpoint?:string;allowedIps:string[];keepaliveSeconds:number}>):Promise<void>{
     await this.requireBinary("wg");
     for(const p of peers){assertKey(p.publicKey,"peer public key");assertCidrList(p.allowedIps);}
-    if(peers.length===0)return;
-    const setArgs=["set",this.iface];
-    for(const p of peers){
-      setArgs.push("peer",p.publicKey,"allowed-ips",p.allowedIps.join(","),
-        "persistent-keepalive",String(p.keepaliveSeconds));
-      if(p.endpoint)setArgs.push("endpoint",p.endpoint);
-    }
-    await this.run("wg",setArgs);
+    const lines=peers.flatMap(p=>[
+      "[Peer]",`PublicKey = ${p.publicKey}`,`AllowedIPs = ${p.allowedIps.join(", ")}`,
+      `PersistentKeepalive = ${p.keepaliveSeconds}`,
+      ...(p.endpoint?[`Endpoint = ${p.endpoint}`]:[]),""
+    ]);
+    const dir=mkdtempSync(join(tmpdir(),"bapc-wg-peers-"));
+    const confPath=join(dir,"peers.conf");
+    writeFileSync(confPath,lines.join("\n"));
+    await this.run("wg",["syncconf",this.iface,confPath]);
   }
 
   async applyFirewall(input:{

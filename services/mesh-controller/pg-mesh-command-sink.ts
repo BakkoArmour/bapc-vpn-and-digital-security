@@ -13,11 +13,11 @@ import type {PgCommandQueue} from "./pg-command-queue.js";
 // `configure` uses "APPLY_PEERS" (PlatformAdapter.applyPeers), not
 // "APPLY_WIREGUARD": the full-config command requires `privateKeyReference`
 // — the node's own WireGuard private key material, which correctly never
-// reaches this server. applyPeers updates only the peer set on an interface
-// that's already up, so no key material needs to be fabricated or touched.
-// It does not remove peers absent from the new list (see applyPeers'
-// comments in native/linux/adapter.ts and native/windows/adapter.ts) — full
-// stale-peer teardown is a separate concern from delivering an update.
+// reaches this server. applyPeers replaces the entire peer set on an
+// interface that's already up (via `wg syncconf`/`wg.exe syncconf` — see
+// native/linux/adapter.ts and native/windows/adapter.ts), so peers dropped
+// from `peers` here are actually removed on the node, not just left stale,
+// and no key material needs to be fabricated or touched to do it.
 export class PgMeshCommandSink implements MeshCommandSink {
   constructor(private queue:PgCommandQueue){}
 

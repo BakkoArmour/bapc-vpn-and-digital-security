@@ -57,7 +57,7 @@ test("LinuxPlatformAdapter.applyWireGuard configures the interface via wg/ip",as
   assert.ok(calls.some(c=>c.cmd==="ip"&&c.args.includes("add")));
 });
 
-test("LinuxPlatformAdapter.applyPeers updates peers via `wg set` without ever touching private-key",async()=>{
+test("LinuxPlatformAdapter.applyPeers syncs the full peer set via `wg syncconf` without ever writing a private key",async()=>{
   const {run,calls}=fakeRunner({
     which:()=>({stdout:"/usr/bin/wg",stderr:""}),
     wg:()=>({stdout:"",stderr:""})
@@ -66,11 +66,27 @@ test("LinuxPlatformAdapter.applyPeers updates peers via `wg set` without ever to
   await adapter.applyPeers([{publicKey:VALID_KEY,allowedIps:["10.144.0.6/32"],keepaliveSeconds:25,endpoint:"relay.example:51820"}]);
   const wgCall=calls.find(c=>c.cmd==="wg");
   assert.ok(wgCall);
-  assert.ok(wgCall!.args.includes("peer"));
-  assert.ok(wgCall!.args.includes(VALID_KEY));
-  assert.ok(wgCall!.args.includes("endpoint"));
-  assert.ok(!wgCall!.args.includes("private-key"));
+  assert.equal(wgCall!.args[0],"syncconf");
+  assert.equal(wgCall!.args[1],"bapc0");
+  const conf=readFileSync(wgCall!.args[2]!,"utf8");
+  assert.match(conf,/\[Peer\]/);
+  assert.match(conf,new RegExp(VALID_KEY.replace(/\+/g,"\\+")));
+  assert.match(conf,/Endpoint = relay\.example:51820/);
+  assert.doesNotMatch(conf,/\[Interface\]/);
+  assert.doesNotMatch(conf,/PrivateKey/);
   assert.equal(calls.some(c=>c.cmd==="ip"),false);
+});
+
+test("LinuxPlatformAdapter.applyPeers with an empty peer list removes every peer",async()=>{
+  const {run,calls}=fakeRunner({
+    which:()=>({stdout:"/usr/bin/wg",stderr:""}),
+    wg:()=>({stdout:"",stderr:""})
+  });
+  const adapter=new LinuxPlatformAdapter("bapc0",run);
+  await adapter.applyPeers([]);
+  const wgCall=calls.find(c=>c.cmd==="wg");
+  assert.ok(wgCall);
+  assert.equal(readFileSync(wgCall!.args[2]!,"utf8").trim(),"");
 });
 
 test("LinuxPlatformAdapter.applyPeers rejects a malformed peer key",async()=>{
@@ -217,7 +233,7 @@ test("WindowsPlatformAdapter.applyWireGuard writes a conf and installs the tunne
   assert.match(conf,new RegExp(VALID_KEY.replace(/\+/g,"\\+")));
 });
 
-test("WindowsPlatformAdapter.applyPeers updates peers via wg.exe, never reinstalling the tunnel service",async()=>{
+test("WindowsPlatformAdapter.applyPeers syncs the full peer set via wg.exe syncconf, never reinstalling the tunnel service",async()=>{
   const {run,calls}=fakeRunner({
     "wg.exe":()=>({stdout:"",stderr:""})
   });
@@ -225,8 +241,12 @@ test("WindowsPlatformAdapter.applyPeers updates peers via wg.exe, never reinstal
   await adapter.applyPeers([{publicKey:VALID_KEY,allowedIps:["10.144.0.10/32"],keepaliveSeconds:25}]);
   const wgCall=calls.find(c=>c.cmd==="wg.exe");
   assert.ok(wgCall);
-  assert.ok(wgCall!.args.includes("peer"));
-  assert.ok(wgCall!.args.includes(VALID_KEY));
+  assert.equal(wgCall!.args[0],"syncconf");
+  assert.equal(wgCall!.args[1],"BAPC");
+  const conf=readFileSync(wgCall!.args[2]!,"utf8");
+  assert.match(conf,/\[Peer\]/);
+  assert.match(conf,new RegExp(VALID_KEY.replace(/\+/g,"\\+")));
+  assert.doesNotMatch(conf,/PrivateKey/);
   assert.equal(calls.some(c=>c.cmd==="wireguard.exe"),false);
 });
 

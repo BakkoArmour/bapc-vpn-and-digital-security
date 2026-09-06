@@ -65,21 +65,21 @@ export class WindowsPlatformAdapter implements PlatformAdapter, AgentPlatform {
   }
 
   // WireGuard for Windows installs `wg.exe` alongside `wireguard.exe` — the
-  // same cross-platform `wg` CLI Linux uses. `wg.exe set <alias> peer ...`
-  // updates/adds each named peer in the running tunnel without touching
-  // `PrivateKey`, unlike applyWireGuard's full uninstall/reinstall of the
-  // tunnel service. Does not remove peers absent from `peers` — see the
-  // Linux adapter's applyPeers comment for why that's a separate concern.
+  // same cross-platform `wg` CLI Linux uses, including `syncconf`. As on
+  // Linux, this replaces the entire peer set from a config file containing
+  // only [Peer] sections — added, updated, and removed in one atomic call,
+  // with no [Interface] section so `PrivateKey` is never touched.
   async applyPeers(peers:Array<{publicKey:string;endpoint?:string;allowedIps:string[];keepaliveSeconds:number}>):Promise<void>{
     for(const p of peers)if(!WG_KEY_RE.test(p.publicKey))throw new Error("invalid peer public key");
-    if(peers.length===0)return;
-    const setArgs=["set",this.interfaceAlias];
-    for(const p of peers){
-      setArgs.push("peer",p.publicKey,"allowed-ips",p.allowedIps.join(","),
-        "persistent-keepalive",String(p.keepaliveSeconds));
-      if(p.endpoint)setArgs.push("endpoint",p.endpoint);
-    }
-    await this.run("wg.exe",setArgs);
+    const lines=peers.flatMap(p=>[
+      "[Peer]",`PublicKey = ${p.publicKey}`,`AllowedIPs = ${p.allowedIps.join(", ")}`,
+      `PersistentKeepalive = ${p.keepaliveSeconds}`,
+      ...(p.endpoint?[`Endpoint = ${p.endpoint}`]:[]),""
+    ]);
+    const dir=mkdtempSync(join(tmpdir(),"bapc-wg-peers-"));
+    const confPath=join(dir,"peers.conf");
+    writeFileSync(confPath,lines.join("\n"));
+    await this.run("wg.exe",["syncconf",this.interfaceAlias,confPath]);
   }
 
   async applyFirewall(input:{
