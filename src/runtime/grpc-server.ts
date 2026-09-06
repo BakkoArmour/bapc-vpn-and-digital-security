@@ -18,6 +18,7 @@ import {TrustCoreIssuer} from "../../services/trust-core/issuer.js";
 import {ForgeX509Builder} from "../../services/trust-core/x509-forge.js";
 import {TrustCoreCertificateIssuer} from "../../services/trust-core/trust-core-certificate-issuer.js";
 import {PgCertificateStore} from "../../services/trust-core/pg-certificate-store.js";
+import {PgRelayStore} from "../../services/relay-fleet/pg-relay-store.js";
 
 await hydrateSecretsFromAws();
 const config=loadConfig();
@@ -38,7 +39,13 @@ const certificateIssuer=new TrustCoreCertificateIssuer(new TrustCoreIssuer(
 ));
 
 const commandQueue=new PgCommandQueue(db);
-const meshController=new MeshController(new PgMeshCommandSink(commandQueue));
+// RelayRoutingService existed fully built and tested with no caller
+// anywhere — reconcile's relayEndpoint parameter had no real supplier, so
+// mesh topology was always DIRECT even when a healthy relay was actually
+// registered and heartbeating. PgRelayStore.candidates() is real
+// (relays.load_percent/latency_ms/last_heartbeat, previously never
+// written to either — see PgRelayStore's own comment).
+const meshController=new MeshController(new PgMeshCommandSink(commandQueue),new PgRelayStore(db));
 // EnrollmentService.register calls peers.configure(newNode, existingPeers)
 // right after enrolling — previously NoopPeerDistributor, so every node
 // already active before a new one joined never learned about it. Reuses

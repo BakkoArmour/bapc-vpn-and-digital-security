@@ -26,3 +26,39 @@ test("PgRelayStore.get returns null for an unknown relay",async()=>{
   const store=new PgRelayStore({query:async()=>({rows:[]})});
   assert.equal(await store.get("missing"),null);
 });
+
+// Self-registration (src/runtime/relay-server.ts) has no AWS instance id —
+// previously insert() required one and had no ON CONFLICT, so a restarting
+// relay re-registering with the same id would error instead of upserting.
+test("PgRelayStore.insert upserts and accepts no instanceId for self-registered relays",async()=>{
+  const queries:Array<{text:string;values:unknown[]}>=[];
+  const store=new PgRelayStore({query:async(text,values=[])=>{queries.push({text,values});return {rows:[]};}});
+  await store.insert("r2","us-west-2","203.0.113.20:51900");
+  assert.match(queries[0]!.text,/ON CONFLICT\(relay_id\) DO UPDATE/);
+  assert.deepEqual(queries[0]!.values,["r2","us-west-2","203.0.113.20:51900",null]);
+});
+
+// load_percent/latency_ms/last_heartbeat had no write path at all before
+// this — a relay's recorded health was frozen at whatever insert() set it
+// to (0/0), forever.
+test("PgRelayStore.heartbeat updates health and marks the relay available",async()=>{
+  const queries:Array<{text:string;values:unknown[]}>=[];
+  const store=new PgRelayStore({query:async(text,values=[])=>{queries.push({text,values});return {rows:[]};}});
+  await store.heartbeat("r1",{loadPercent:42,latencyMs:80});
+  assert.match(queries[0]!.text,/UPDATE bapc_security_core\.relays/);
+  assert.deepEqual(queries[0]!.values,["r1",42,80]);
+});
+
+test("PgRelayStore.candidates only returns relays heartbeated within the freshness window",async()=>{
+  const store=new PgRelayStore({
+    query:async(text)=>{
+      assert.match(text,/last_heartbeat>now\(\)-interval '45 seconds'/);
+      return {rows:[{relay_id:"r1",region:"us-east-1",endpoint:"203.0.113.10:51900",load_percent:"10.00",latency_ms:30,is_available:true,last_heartbeat:new Date().toISOString()}]};
+    }
+  });
+  const candidates=await store.candidates();
+  assert.equal(candidates.length,1);
+  assert.equal(candidates[0]!.id,"r1");
+  assert.equal(candidates[0]!.loadPercent,10);
+  assert.equal(candidates[0]!.latencyMs,30);
+});

@@ -37,6 +37,11 @@ x-control-env: &control-env
 #              whose job actually requires it: secure-dns (DoH upstream),
 #              blind-relay (relays real traffic to/from internet peers) and
 #              egress-gateway (its entire purpose is proxying traffic out).
+# blind-relay is also on `api`, in addition to `egress`: it self-registers
+# and heartbeats against control-api's REST API (POST /api/v1/relays/
+# register, /:id/heartbeat — see src/runtime/relay-server.ts) so
+# RelayRoutingService has a real candidate to select, which needs it to
+# reach control-api the same way mesh-grpc/oob-controller/soc-console do.
 
 services:
   postgres:
@@ -119,8 +124,19 @@ services:
 
   blind-relay:
     <<: *app-image
-    environment: {NODE_ENV: production, RELAY_BIND_HOST: "0.0.0.0", RELAY_PORT: "51900"}
-    networks: [egress] # stateless packet forwarder — no database
+    environment:
+      NODE_ENV: production
+      RELAY_BIND_HOST: "0.0.0.0"
+      RELAY_PORT: "51900"
+      # Registration/heartbeat is entirely optional (relay-server.ts skips
+      # it cleanly if any of these five are unset) — set RELAY_AGENT_TOKEN
+      # (mint with `npm run token -- --roles security-agent`) to enable it.
+      RELAY_ID: "0a2e90eb-ff1b-47e7-9224-6c633c21883c" # fixed: relays.relay_id is a uuid column
+      RELAY_REGION: "local"
+      RELAY_PUBLIC_ENDPOINT: "blind-relay:51900"
+      BAPC_CONTROLLER_URL: "http://control-api:8080"
+      BAPC_AGENT_TOKEN: ${RELAY_AGENT_TOKEN:-}
+    networks: [egress, api] # egress to relay real traffic; api to reach control-api for registration
     command: ["node", "dist/src/runtime/relay-server.js"]
     ports: ["51900:51900/udp"]
 

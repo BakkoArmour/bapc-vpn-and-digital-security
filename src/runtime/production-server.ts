@@ -364,6 +364,32 @@ router.add("POST","/api/v1/relays/:id/terminate",["security-owner"],async({claim
   return {terminated:true};
 },{rateLimit:{limit:5,windowMs:60_000}});
 
+// relays.load_percent/latency_ms/last_heartbeat had no write path at all —
+// a relay's recorded health was whatever it was at insert() time, forever.
+// A real relay process (services/relay/blind-relay-server.ts or an
+// AWS-provisioned instance) calls this periodically; RelayRoutingService
+// (via grpc-server.ts's mesh reconciliation) only considers a relay a
+// candidate within the 45s freshness window this maintains.
+// Distinct from /provision (AWS-specific, security-owner-gated, launches a
+// new EC2 instance): this is how a relay process that already exists — the
+// fixed blind-relay in docker-compose, or any manually-run relay — makes
+// itself a real candidate for RelayRoutingService to select, instead of
+// requiring every relay to have come from AWS auto-provisioning. Idempotent
+// (PgRelayStore.insert upserts), so a restarting relay just re-registers.
+router.add("POST","/api/v1/relays/register",["security-agent"],async({body})=>{
+  const relayId=String(body.relayId??"");
+  if(!relayId||!body.region||!body.endpoint)throw new HttpError(400,"relayId, region and endpoint are required","invalid_request");
+  await relayStore.insert(relayId,String(body.region),String(body.endpoint));
+  return {registered:true,relayId};
+},{idempotent:true});
+
+router.add("POST","/api/v1/relays/:id/heartbeat",["security-agent"],async({params,body})=>{
+  await relayStore.heartbeat(params.id!,{
+    loadPercent:Number(body.loadPercent??0),latencyMs:Number(body.latencyMs??0)
+  });
+  return {acknowledged:true};
+},{rateLimit:{limit:120,windowMs:60_000}});
+
 const server=createServer((req,res)=>void router.handle(req,res));
 server.requestTimeout=15_000;
 server.headersTimeout=10_000;
