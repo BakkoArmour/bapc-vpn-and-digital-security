@@ -51,6 +51,42 @@ const call=(port:number,method:string,path:string,opts:{token?:string;body?:unkn
     req.end();
   });
 
+test("a CORS preflight OPTIONS request succeeds with no auth and echoes the Origin",async()=>{
+  // Regression: the console (a different origin/port from the API) never
+  // actually worked in a real browser until this was added — the browser's
+  // preflight OPTIONS request 404d against the route table (no OPTIONS
+  // route existed) and the real request was blocked before it was even
+  // sent. Static-file-serving tests for the console never caught this
+  // because they don't drive a real cross-origin fetch.
+  const {server,port}=await startServer();
+  try{
+    const status=await new Promise<{code:number;headers:import("node:http").IncomingHttpHeaders}>((resolve,reject)=>{
+      const req=request({host:"127.0.0.1",port,path:"/api/v1/secure",method:"OPTIONS",
+        headers:{origin:"http://127.0.0.1:8090"}},
+        res=>{res.resume();res.on("end",()=>resolve({code:res.statusCode!,headers:res.headers}));});
+      req.on("error",reject);req.end();
+    });
+    assert.equal(status.code,204);
+    assert.equal(status.headers["access-control-allow-origin"],"http://127.0.0.1:8090");
+    assert.match(status.headers["access-control-allow-methods"]??"",/GET/);
+    assert.match(status.headers["access-control-allow-headers"]??"",/authorization/);
+  }finally{server.close();}
+});
+
+test("a real cross-origin response also carries Access-Control-Allow-Origin",async()=>{
+  const {server,port}=await startServer();
+  try{
+    const status=await new Promise<{code:number;headers:import("node:http").IncomingHttpHeaders}>((resolve,reject)=>{
+      const req=request({host:"127.0.0.1",port,path:"/api/v1/status",method:"GET",
+        headers:{origin:"http://127.0.0.1:8090",authorization:`Bearer ${token([])}`}},
+        res=>{res.resume();res.on("end",()=>resolve({code:res.statusCode!,headers:res.headers}));});
+      req.on("error",reject);req.end();
+    });
+    assert.equal(status.code,200);
+    assert.equal(status.headers["access-control-allow-origin"],"http://127.0.0.1:8090");
+  }finally{server.close();}
+});
+
 test("unauthenticated requests to protected routes are rejected",async()=>{
   const {server,port}=await startServer();
   try{

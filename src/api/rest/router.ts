@@ -50,12 +50,39 @@ export class RestRouter {
     const pattern=new RegExp("^"+path.replace(/:[^/]+/g,m=>{keys.push(m.slice(1));return "([^/]+)";})+"$");
     this.routes.push({method,pattern,keys,roles,handler,options});
   }
+  // Every route in this API is meant to be called from a browser-hosted
+  // console/PEP running on a different origin (a different port is a
+  // different origin) — the console's own auth is the bearer token, not a
+  // cookie, so echoing the caller's Origin back is the standard, safe CORS
+  // pattern for a bearer-token API (there's no ambient credential a
+  // malicious page could ride along on). Without this, a browser's
+  // preflight OPTIONS request 404s against the route table and every real
+  // request is silently blocked before it's even sent — exactly what
+  // happened the first time the console was driven from a real browser
+  // against a real backend instead of just checked for static-file serving.
+  private corsHeaders(req:IncomingMessage):Record<string,string>{
+    const origin=req.headers.origin;
+    if(!origin)return {};
+    return {
+      "Access-Control-Allow-Origin":origin,
+      "Access-Control-Allow-Methods":"GET,POST,PUT,DELETE,OPTIONS",
+      "Access-Control-Allow-Headers":"authorization,content-type,idempotency-key,x-request-nonce",
+      "Access-Control-Max-Age":"600",
+      "Vary":"Origin"
+    };
+  }
   async handle(req:IncomingMessage,res:ServerResponse){
     const requestId=randomUUID();
+    const cors=this.corsHeaders(req);
+    if(req.method==="OPTIONS"){
+      res.writeHead(204,cors);
+      res.end();
+      return;
+    }
     try{
-      if(req.url==="/healthz"){this.respond(res,200,{status:"ok",requestId});return;}
+      if(req.url==="/healthz"){this.respond(res,200,{status:"ok",requestId},cors);return;}
       if(this.exposeMetrics&&req.url==="/metrics"){
-        res.writeHead(200,{"content-type":"text/plain; version=0.0.4"});
+        res.writeHead(200,{"content-type":"text/plain; version=0.0.4",...cors});
         res.end(metrics.render());
         return;
       }
@@ -82,7 +109,7 @@ export class RestRouter {
       const body=await this.readJson(req);
       if(route.options.raw){
         const raw=await route.handler({request:req,claims,body,params,query}) as RawResponse;
-        res.writeHead(200,{"content-type":raw.contentType,"cache-control":"no-store"});
+        res.writeHead(200,{"content-type":raw.contentType,"cache-control":"no-store",...cors});
         res.end(raw.body);
         return;
       }
@@ -92,11 +119,11 @@ export class RestRouter {
       const result=route.options.idempotent
         ? await withIdempotency(this.idempotencyStore,idempotencyKey,claims.sub,body,86_400_000,run)
         : await run();
-      this.respond(res,result.status,result.body);
+      this.respond(res,result.status,result.body,cors);
     }catch(error){
       const e=asHttpError(error);
       metrics.incrLabeled("bapc_http_errors_total",{code:e.code,status:String(e.status)});
-      this.respond(res,e.status,{requestId,error:{code:e.code,message:e.message}});
+      this.respond(res,e.status,{requestId,error:{code:e.code,message:e.message}},cors);
     }
   }
   private async readJson(req:IncomingMessage){
@@ -113,11 +140,12 @@ export class RestRouter {
     try{return JSON.parse(Buffer.concat(chunks).toString("utf8"));}
     catch{throw new HttpError(400,"invalid JSON","invalid_json");}
   }
-  private respond(res:ServerResponse,status:number,value:unknown){
+  private respond(res:ServerResponse,status:number,value:unknown,extraHeaders:Record<string,string>={}){
     res.writeHead(status,{
       "content-type":"application/json; charset=utf-8","cache-control":"no-store",
       "x-content-type-options":"nosniff","x-frame-options":"DENY",
-      "referrer-policy":"no-referrer","content-security-policy":"default-src 'none'"
+      "referrer-policy":"no-referrer","content-security-policy":"default-src 'none'",
+      ...extraHeaders
     });
     res.end(JSON.stringify(value));
   }
