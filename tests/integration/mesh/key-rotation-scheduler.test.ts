@@ -6,7 +6,7 @@ test("KeyRotationSchedulerService enqueues ROTATE_IDENTITY_REQUIRED for every ov
   const enqueued:Array<{nodeId:string;type:string;payload:unknown;priority:number|undefined}>=[];
   const scheduler=new KeyRotationSchedulerService(
     {nodesOverdueForRotation:async()=>["n1","n2"]},
-    {enqueue:async(nodeId,type,payload,priority)=>{enqueued.push({nodeId,type,payload,priority});}},
+    {enqueue:async(nodeId,type,payload,priority)=>{enqueued.push({nodeId,type,payload,priority});},hasPending:async()=>false},
     30
   );
   const result=await scheduler.run();
@@ -19,7 +19,7 @@ test("KeyRotationSchedulerService enqueues nothing when no node is overdue",asyn
   let enqueueCalls=0;
   const scheduler=new KeyRotationSchedulerService(
     {nodesOverdueForRotation:async()=>[]},
-    {enqueue:async()=>{enqueueCalls++;}},
+    {enqueue:async()=>{enqueueCalls++;},hasPending:async()=>false},
     30
   );
   const result=await scheduler.run();
@@ -31,9 +31,27 @@ test("KeyRotationSchedulerService passes its configured maxAgeDays through to th
   let seenMaxAgeDays:number|undefined;
   const scheduler=new KeyRotationSchedulerService(
     {nodesOverdueForRotation:async(maxAgeDays)=>{seenMaxAgeDays=maxAgeDays;return [];}},
-    {enqueue:async()=>{}},
+    {enqueue:async()=>{},hasPending:async()=>false},
     45
   );
   await scheduler.run();
   assert.equal(seenMaxAgeDays,45);
+});
+
+// A node still overdue on the next daily run would otherwise get a fresh
+// ROTATE_IDENTITY_REQUIRED every single run until it finally rotates —
+// skip nodes that already have one outstanding.
+test("KeyRotationSchedulerService does not re-enqueue a node that already has ROTATE_IDENTITY_REQUIRED pending",async()=>{
+  const enqueued:string[]=[];
+  const scheduler=new KeyRotationSchedulerService(
+    {nodesOverdueForRotation:async()=>["n1","n2"]},
+    {
+      enqueue:async(nodeId)=>{enqueued.push(nodeId);},
+      hasPending:async(nodeId)=>nodeId==="n1"
+    },
+    30
+  );
+  const result=await scheduler.run();
+  assert.equal(result.checked,2);
+  assert.deepEqual(enqueued,["n2"]);
 });

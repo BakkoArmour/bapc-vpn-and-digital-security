@@ -19,6 +19,7 @@ import type {MeshNode} from "../../../src/domain/types.js";
 class FakeQueue {
   enqueued:Array<{nodeId:string;type:string}>=[];
   async enqueue(nodeId:string,type:string){this.enqueued.push({nodeId,type});}
+  async hasPending(){return false;}
 }
 class FakeCertificateStore {
   revoked:string[]=[];

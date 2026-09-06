@@ -3,6 +3,7 @@ export interface OverdueRotationSource {
 }
 export interface RotationCommandQueue {
   enqueue(nodeId:string,type:string,payload:unknown,priority?:number):Promise<void>;
+  hasPending(nodeId:string,type:string):Promise<boolean>;
 }
 
 // KEY_ROTATION_DAYS (config.ts's keyRotationDays) had no consumer anywhere —
@@ -17,7 +18,13 @@ export class KeyRotationSchedulerService {
   constructor(private source:OverdueRotationSource,private queue:RotationCommandQueue,private maxAgeDays:number){}
   async run(now=new Date()){
     const overdue=await this.source.nodesOverdueForRotation(this.maxAgeDays,now);
-    for(const nodeId of overdue)await this.queue.enqueue(nodeId,"ROTATE_IDENTITY_REQUIRED",{},200);
+    for(const nodeId of overdue){
+      // A node overdue today is still overdue tomorrow's run if it hasn't
+      // rotated yet — skip it if it already has an unacknowledged
+      // ROTATE_IDENTITY_REQUIRED outstanding instead of piling up another.
+      if(await this.queue.hasPending(nodeId,"ROTATE_IDENTITY_REQUIRED"))continue;
+      await this.queue.enqueue(nodeId,"ROTATE_IDENTITY_REQUIRED",{},200);
+    }
     return {checked:overdue.length,nodeIds:overdue};
   }
 }

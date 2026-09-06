@@ -14,6 +14,7 @@ import type {MeshNode} from "../../../src/domain/types.js";
 class FakeQueue {
   enqueued:Array<{nodeId:string;type:string;payload:unknown}>=[];
   async enqueue(nodeId:string,type:string,payload:unknown){this.enqueued.push({nodeId,type,payload});}
+  async hasPending(nodeId:string,type:string){return this.enqueued.some(e=>e.nodeId===nodeId&&e.type===type);}
 }
 class FakeCertificateStore {
   revoked:Array<{serial:string;reason:string}>=[];
@@ -79,4 +80,16 @@ test("rotateMeshIdentity enqueues ROTATE_IDENTITY_REQUIRED — never rotates any
   assert.equal(queue.enqueued.length,1);
   assert.equal(queue.enqueued[0]!.nodeId,"n1");
   assert.equal(queue.enqueued[0]!.type,"ROTATE_IDENTITY_REQUIRED");
+});
+
+// A node stuck in EMERGENCY (chronic posture failures) re-triggers this on
+// every heartbeat until dismissed — without a dedup check this would pile
+// up a fresh ROTATE_IDENTITY_REQUIRED row per heartbeat, forever.
+test("rotateMeshIdentity does not enqueue a second ROTATE_IDENTITY_REQUIRED while one is already pending",async()=>{
+  const queue=new FakeQueue();
+  const port=new PgThreatActionPort(new MemoryStore() as any,new MemoryStore() as any,new InMemoryEnforcer() as any,new FakeCertificateStore() as any,queue as any,new MemoryBus());
+  await port.rotateMeshIdentity("n1");
+  await port.rotateMeshIdentity("n1");
+  await port.rotateMeshIdentity("n1");
+  assert.equal(queue.enqueued.length,1);
 });

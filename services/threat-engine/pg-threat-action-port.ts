@@ -48,7 +48,13 @@ export class PgThreatActionPort implements ThreatActionPort {
     if(cert)await this.certificates.revoke(cert.serial,reason,new Date());
   }
 
+  // A node stuck failing posture checks keeps re-triggering ThreatEngine's
+  // EMERGENCY tier on every heartbeat until an operator dismisses it — skip
+  // re-enqueueing if the node already has an unacknowledged
+  // ROTATE_IDENTITY_REQUIRED outstanding, instead of piling up a fresh one
+  // per evaluation.
   async rotateMeshIdentity(nodeId:string):Promise<void>{
+    if(await this.queue.hasPending(nodeId,"ROTATE_IDENTITY_REQUIRED"))return;
     await this.queue.enqueue(nodeId,"ROTATE_IDENTITY_REQUIRED",{},200);
   }
 

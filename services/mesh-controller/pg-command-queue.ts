@@ -20,6 +20,22 @@ export class PgCommandQueue {
     );
   }
 
+  // A node that keeps reporting the same problem (a chronically-failing
+  // heartbeat, a key still overdue on the next daily rotation sweep) has
+  // nothing stopping the caller from calling enqueue() again on every check
+  // — without this, ThreatEngine's EMERGENCY tier and
+  // KeyRotationSchedulerService would each pile up a fresh
+  // ROTATE_IDENTITY_REQUIRED row per check, forever, for a node that simply
+  // hasn't acknowledged the first one yet.
+  async hasPending(nodeId:string,type:string):Promise<boolean>{
+    const r=await this.db.query(
+      `SELECT 1 FROM bapc_security_core.controller_commands
+       WHERE node_id=$1 AND command_type=$2 AND acknowledged_at IS NULL AND expires_at>now() LIMIT 1`,
+      [nodeId,type]
+    );
+    return r.rows.length>0;
+  }
+
   async pending(nodeId:string,limit=20):Promise<QueuedCommand[]>{
     const r=await this.db.query(
       `SELECT command_id,command_type,payload FROM bapc_security_core.controller_commands
