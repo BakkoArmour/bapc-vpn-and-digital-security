@@ -114,13 +114,23 @@ export class PgRepositories implements DeviceRepository,NodeRepository,
     // reached Postgres, so nothing that persisted could ever check a node's
     // identity against it (e.g. verifying a key-rotation request really came
     // from the node that originally enrolled — see PgKeyRotationLedger).
+    // last_posture_at/agent_version/quarantine_reason: every real caller
+    // that updates an existing device fetches it via get() and spreads it
+    // first (see HeartbeatService.accept, ThreatResponseService.handle/
+    // restore), so an unconditional column write here is safe — the
+    // caller's own spread is what preserves a field it isn't deliberately
+    // changing. Only EnrollmentService.register creates a Device from
+    // scratch (all three correctly NULL for a brand-new device).
     await this.q(`INSERT INTO bapc_security_core.devices
-      (device_id,hostname,hardware_uuid,platform,os_version,attestation_public_key,is_compromised,is_revoked,posture,created_at,updated_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      (device_id,hostname,hardware_uuid,platform,os_version,attestation_public_key,is_compromised,is_revoked,posture,created_at,updated_at,last_posture_at,agent_version,quarantine_reason)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
       ON CONFLICT(device_id) DO UPDATE SET hostname=EXCLUDED.hostname,
       os_version=EXCLUDED.os_version,is_compromised=EXCLUDED.is_compromised,
-      is_revoked=EXCLUDED.is_revoked,posture=EXCLUDED.posture,updated_at=EXCLUDED.updated_at`,
-      [d.id,d.hostname,d.hardwareId,d.platform,d.osVersion,d.publicAttestationKey??null,d.compromised,d.revoked,d.posture,d.createdAt,d.updatedAt]);
+      is_revoked=EXCLUDED.is_revoked,posture=EXCLUDED.posture,updated_at=EXCLUDED.updated_at,
+      last_posture_at=EXCLUDED.last_posture_at,agent_version=EXCLUDED.agent_version,
+      quarantine_reason=EXCLUDED.quarantine_reason`,
+      [d.id,d.hostname,d.hardwareId,d.platform,d.osVersion,d.publicAttestationKey??null,d.compromised,d.revoked,d.posture,d.createdAt,d.updatedAt,
+       d.lastPostureAt??null,d.agentVersion??null,d.quarantineReason??null]);
   }
   private async saveNode(n:MeshNode){
     // region is only ever written when the caller explicitly supplies one:
@@ -170,7 +180,10 @@ export class PgRepositories implements DeviceRepository,NodeRepository,
     id:x.device_id,hostname:x.hostname,hardwareId:x.hardware_uuid,platform:x.platform,
     osVersion:x.os_version,compromised:x.is_compromised,revoked:x.is_revoked,
     posture:json(x.posture),createdAt:date(x.created_at),updatedAt:date(x.updated_at),
-    ...(x.attestation_public_key?{publicAttestationKey:x.attestation_public_key}:{})
+    ...(x.attestation_public_key?{publicAttestationKey:x.attestation_public_key}:{}),
+    ...(x.last_posture_at?{lastPostureAt:date(x.last_posture_at)}:{}),
+    ...(x.agent_version?{agentVersion:x.agent_version}:{}),
+    ...(x.quarantine_reason?{quarantineReason:x.quarantine_reason}:{})
   } as Device;}
   private node(x:any):MeshNode{return {
     id:x.node_id,deviceId:x.device_id,wireGuardPublicKey:x.public_key,

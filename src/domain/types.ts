@@ -7,7 +7,12 @@ export type PolicyAction = "ALLOW" | "DENY" | "ISOLATE";
 export type ThreatLevel = 0 | 1 | 2 | 3;
  
 export interface DevicePosture { osCurrent: boolean; diskEncrypted: boolean; secureBoot: boolean; firewallEnabled: boolean; agentHealthy: boolean; bannedProcessFound: boolean; assessedAt: Date; }
-export interface Device { id: UUID; hostname: string; hardwareId: string; platform: Platform; osVersion: string; publicAttestationKey?: string; compromised: boolean; revoked: boolean; posture: DevicePosture; createdAt: Date; updatedAt: Date; }
+// lastPostureAt/agentVersion (db/004) are set from HeartbeatService.accept's
+// real heartbeat payload; quarantineReason is set from the SecurityEvent
+// description that triggered ThreatResponseService.handle's quarantine and
+// cleared on restore() — all three columns existed with no read/write path
+// at all before this.
+export interface Device { id: UUID; hostname: string; hardwareId: string; platform: Platform; osVersion: string; publicAttestationKey?: string; compromised: boolean; revoked: boolean; posture: DevicePosture; createdAt: Date; updatedAt: Date; lastPostureAt?: Date; agentVersion?: string; quarantineReason?: string; }
 // Sentinel for a node with no operator-assigned geography yet (db/019's
 // column default) — deliberately not a real region code, so routing never
 // mistakes "unset" for a genuine LOCAL_RELAY match.
