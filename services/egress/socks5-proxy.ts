@@ -14,6 +14,8 @@ const ALLOW_ALL:EgressPolicy={async isAllowed(){return true;}};
 // enforce destination allowlists/abuse controls before a CONNECT proceeds.
 export class Socks5EgressProxy {
   private server:Server|undefined;
+  private activeConnections=0;
+  private bytesProxied=0;
   constructor(private policy:EgressPolicy=ALLOW_ALL){}
 
   start(port:number,host="127.0.0.1"):Promise<void>{
@@ -25,8 +27,18 @@ export class Socks5EgressProxy {
   }
   async stop(){return new Promise<void>(resolve=>{if(!this.server)return resolve();this.server.close(()=>resolve());});}
   address(){return this.server?.address();}
+  // Real, live counts — used by src/runtime/egress-server.ts to report
+  // actual active sessions/throughput on every heartbeat instead of the
+  // hardcoded 0 values it used to send.
+  get activeSessionCount(){return this.activeConnections;}
+  get totalBytesProxied(){return this.bytesProxied;}
 
   private handleClient(client:Socket){
+    this.activeConnections++;
+    let closed=false;
+    const onClose=()=>{if(closed)return;closed=true;this.activeConnections--;};
+    client.on("close",onClose);
+    client.on("error",onClose);
     client.once("data",greeting=>{
       if(greeting[0]!==0x05){client.destroy();return;}
       client.write(Buffer.from([0x05,0x00])); // version 5, no authentication required
@@ -60,6 +72,8 @@ export class Socks5EgressProxy {
 
     const upstream=createConnection({host,port},()=>{
       client.write(Buffer.from([0x05,0x00,0x00,0x01,0,0,0,0,0,0])); // 0x00 = succeeded
+      upstream.on("data",chunk=>{this.bytesProxied+=chunk.length;});
+      client.on("data",chunk=>{this.bytesProxied+=chunk.length;});
       upstream.pipe(client);
       client.pipe(upstream);
     });

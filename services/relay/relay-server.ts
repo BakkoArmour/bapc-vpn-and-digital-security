@@ -42,6 +42,10 @@ export class BlindRelayServer {
   async stop(){return new Promise<void>(resolve=>{if(!this.socket)return resolve();this.socket.close(()=>resolve());});}
   address(){return this.socket?.address();}
   get totalBytesRelayed(){return this.bytesRelayed;}
+  // Real, live counts — used by src/runtime/relay-server.ts to report
+  // actual active sessions/throughput on every heartbeat instead of the
+  // hardcoded 0 values it used to send.
+  get activeSessionCount(){return this.sessions.size;}
 
   private forward(msg:Buffer,from:RemoteInfo){
     const session=this.byEndpoint.get(this.key(from.address,from.port));

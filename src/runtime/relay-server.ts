@@ -1,7 +1,9 @@
 import {BlindRelayServer} from "../../services/relay/relay-server.js";
+import {CpuLoadSampler, ThroughputSampler} from "../../native/shared/process-metrics.js";
 
 const port=Number(process.env.RELAY_PORT??51900);
 const host=process.env.RELAY_BIND_HOST??"0.0.0.0";
+const maxSessions=Number(process.env.RELAY_MAX_SESSIONS??500);
 const relay=new BlindRelayServer();
 await relay.start(port,host);
 console.log(JSON.stringify({event:"ready",service:"bapc-blind-relay",host,port}));
@@ -31,6 +33,8 @@ if(relayId&&relayRegion&&relayPublicEndpoint&&controllerUrl&&agentToken){
     });
     if(!res.ok)throw new Error(`${path} failed (${res.status})`);
   };
+  const cpu=new CpuLoadSampler();
+  const throughput=new ThroughputSampler();
   // register() is an idempotent upsert (PgRelayStore.insert), so re-running
   // it every tick alongside the heartbeat is safe and self-healing: if
   // control-api isn't up yet when this container starts (a real startup
@@ -40,11 +44,23 @@ if(relayId&&relayRegion&&relayPublicEndpoint&&controllerUrl&&agentToken){
   // the rest of its process lifetime.
   const registerAndHeartbeat=async()=>{
     try{
-      await call("/api/v1/relays/register",{relayId,region:relayRegion,endpoint:relayPublicEndpoint});
+      // capacity_mbps*20 is the sessions-per-Mbps convention this schema
+      // already used for the now-deleted RelayRegistry — reporting our own
+      // RELAY_MAX_SESSIONS back through it keeps that convention honest
+      // instead of leaving every relay at the generic default forever.
+      await call("/api/v1/relays/register",{relayId,region:relayRegion,endpoint:relayPublicEndpoint,capacityMbps:Math.max(1,Math.round(maxSessions/20))});
+      // Real measurements: activeSessions/throughput from the actual
+      // relay's live state, loadPercent from this process's own CPU usage
+      // since the last tick, latencyMs from this very heartbeat call's
+      // round trip to the control plane — no more hardcoded 0s.
+      const activeSessions=relay.activeSessionCount;
+      const loadPercent=cpu.sample();
+      const throughputBytesPerSec=throughput.sample(relay.totalBytesRelayed);
+      const heartbeatStart=Date.now();
       await call(`/api/v1/relays/${encodeURIComponent(relayId)}/heartbeat`,{
-        loadPercent:0,latencyMs:0 // real load/latency sampling is a separate, deeper metrics gap — see docs
+        loadPercent,latencyMs:Date.now()-heartbeatStart,activeSessions,throughputBytesPerSec
       });
-      console.log(JSON.stringify({event:"relay.registered",relayId,region:relayRegion}));
+      console.log(JSON.stringify({event:"relay.registered",relayId,region:relayRegion,activeSessions,loadPercent}));
     }catch(error){
       console.error(JSON.stringify({event:"relay.registration_failed",error:error instanceof Error?error.message:String(error)}));
     }

@@ -17,7 +17,8 @@ const node=(id:string):MeshNode=>({
 });
 const relay=(overrides:Partial<RelayHealth>):RelayHealth=>({
   id:"r1",region:"us-east-1",endpoint:"203.0.113.10:51900",latencyMs:20,loadPercent:10,
-  available:true,lastHeartbeat:new Date(),...overrides
+  available:true,lastHeartbeat:new Date(),activeSessions:5,capacityPercent:10,throughputBytesPerSec:1000,
+  ...overrides
 });
 
 test("reconcile stays DIRECT when no relaySource is configured (unchanged default)",async()=>{
@@ -46,6 +47,29 @@ test("reconcile routes through the best real relay candidate when one exists",as
   await controller.reconcile(node("a"),[node("a"),node("b")]);
   assert.equal(configureCalls[0][0].path,"RELAY");
   assert.equal(configureCalls[0][0].endpoint,"203.0.113.10:51900"); // both candidates share this fixture endpoint
+});
+
+test("a relay at or above 95% capacity is excluded even if latency/load are fine",async()=>{
+  const configureCalls:any[]=[];
+  const controller=new MeshController(
+    {configure:async(n,peers)=>{configureCalls.push(peers);},sever:async()=>{}},
+    {candidates:async()=>[relay({capacityPercent:95})]}
+  );
+  await controller.reconcile(node("a"),[node("a"),node("b")]);
+  assert.equal(configureCalls[0][0].path,"DIRECT");
+});
+
+test("candidate selection prefers lower capacity utilization over marginally better latency",async()=>{
+  const configureCalls:any[]=[];
+  const controller=new MeshController(
+    {configure:async(n,peers)=>{configureCalls.push(peers);},sever:async()=>{}},
+    {candidates:async()=>[
+      relay({id:"busy",endpoint:"busy.example:51900",latencyMs:5,loadPercent:5,capacityPercent:80}),
+      relay({id:"idle",endpoint:"idle.example:51900",latencyMs:15,loadPercent:5,capacityPercent:5})
+    ]}
+  );
+  await controller.reconcile(node("a"),[node("a"),node("b")]);
+  assert.equal(configureCalls[0][0].endpoint,"idle.example:51900");
 });
 
 test("an explicit relayEndpoint argument still wins outright over relaySource candidates",async()=>{

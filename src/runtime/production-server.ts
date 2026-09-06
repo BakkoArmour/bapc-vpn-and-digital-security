@@ -421,13 +421,14 @@ router.add("POST","/api/v1/relays/:id/terminate",["security-owner"],async({claim
 router.add("POST","/api/v1/relays/register",["security-agent"],async({body})=>{
   const relayId=String(body.relayId??"");
   if(!relayId||!body.region||!body.endpoint)throw new HttpError(400,"relayId, region and endpoint are required","invalid_request");
-  await relayStore.insert(relayId,String(body.region),String(body.endpoint));
+  await relayStore.insert(relayId,String(body.region),String(body.endpoint),undefined,body.capacityMbps!==undefined?Number(body.capacityMbps):undefined);
   return {registered:true,relayId};
 },{idempotent:true});
 
 router.add("POST","/api/v1/relays/:id/heartbeat",["security-agent"],async({params,body})=>{
   await relayStore.heartbeat(params.id!,{
-    loadPercent:Number(body.loadPercent??0),latencyMs:Number(body.latencyMs??0)
+    loadPercent:Number(body.loadPercent??0),latencyMs:Number(body.latencyMs??0),
+    activeSessions:Number(body.activeSessions??0),throughputBytesPerSec:Number(body.throughputBytesPerSec??0)
   });
   return {acknowledged:true};
 },{rateLimit:{limit:120,windowMs:60_000}});
@@ -439,13 +440,14 @@ router.add("POST","/api/v1/relays/:id/heartbeat",["security-agent"],async({param
 router.add("POST","/api/v1/egress/register",["security-agent"],async({body})=>{
   const gatewayId=String(body.gatewayId??"");
   if(!gatewayId||!body.region||!body.fixedIp)throw new HttpError(400,"gatewayId, region and fixedIp are required","invalid_request");
-  await egressStore.insert(gatewayId,String(body.region),String(body.fixedIp));
+  await egressStore.insert(gatewayId,String(body.region),String(body.fixedIp),body.maxSessions!==undefined?Number(body.maxSessions):undefined);
   return {registered:true,gatewayId};
 },{idempotent:true});
 
 router.add("POST","/api/v1/egress/:id/heartbeat",["security-agent"],async({params,body})=>{
   await egressStore.heartbeat(params.id!,{
-    loadPercent:Number(body.loadPercent??0),healthy:body.healthy!==false
+    loadPercent:Number(body.loadPercent??0),healthy:body.healthy!==false,
+    latencyMs:Number(body.latencyMs??0),activeSessions:Number(body.activeSessions??0)
   });
   return {acknowledged:true};
 },{rateLimit:{limit:120,windowMs:60_000}});

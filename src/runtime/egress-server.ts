@@ -1,8 +1,10 @@
 import {Socks5EgressProxy} from "../../services/egress/socks5-proxy.js";
+import {CpuLoadSampler} from "../../native/shared/process-metrics.js";
 
 const port=Number(process.env.EGRESS_PORT??1080);
 const host=process.env.EGRESS_BIND_HOST??"0.0.0.0";
 const allowlistEnv=process.env.EGRESS_ALLOWLIST; // comma-separated host:port or host
+const maxSessions=Number(process.env.EGRESS_MAX_SESSIONS??500);
 
 const proxy=new Socks5EgressProxy(allowlistEnv?{
   async isAllowed(host,port){
@@ -36,13 +38,22 @@ if(gatewayId&&gatewayRegion&&gatewayFixedIp&&controllerUrl&&agentToken){
     });
     if(!res.ok)throw new Error(`${path} failed (${res.status})`);
   };
+  const cpu=new CpuLoadSampler();
   const registerAndHeartbeat=async()=>{
     try{
-      await call("/api/v1/egress/register",{gatewayId,region:gatewayRegion,fixedIp:gatewayFixedIp});
+      await call("/api/v1/egress/register",{gatewayId,region:gatewayRegion,fixedIp:gatewayFixedIp,maxSessions});
+      // Real measurements: activeSessions from the actual proxy's live
+      // state, loadPercent from this process's own CPU usage since the
+      // last tick, latencyMs from this very heartbeat call's round trip —
+      // no more hardcoded loadPercent:0. capacityPercent is computed
+      // server-side from activeSessions/max_sessions (PgEgressStore).
+      const activeSessions=proxy.activeSessionCount;
+      const loadPercent=cpu.sample();
+      const heartbeatStart=Date.now();
       await call(`/api/v1/egress/${encodeURIComponent(gatewayId)}/heartbeat`,{
-        loadPercent:0,healthy:true // real load sampling is a separate, deeper metrics gap — see docs
+        loadPercent,healthy:true,latencyMs:Date.now()-heartbeatStart,activeSessions
       });
-      console.log(JSON.stringify({event:"egress.registered",gatewayId,region:gatewayRegion}));
+      console.log(JSON.stringify({event:"egress.registered",gatewayId,region:gatewayRegion,activeSessions,loadPercent}));
     }catch(error){
       console.error(JSON.stringify({event:"egress.registration_failed",error:error instanceof Error?error.message:String(error)}));
     }

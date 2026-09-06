@@ -33,6 +33,21 @@ test("BlindRelayServer forwards datagrams between the two registered endpoints",
   a.close();b.close();await relay.stop();
 });
 
+// relay-server.ts previously had no way to report real active session
+// counts on its heartbeat — activeSessionCount is what makes that real.
+test("BlindRelayServer.activeSessionCount reflects real registered sessions",async()=>{
+  const relay=new BlindRelayServer();
+  await relay.start(0,"127.0.0.1");
+  assert.equal(relay.activeSessionCount,0);
+  const id1=randomUUID(),id2=randomUUID();
+  relay.register({sessionId:id1,a:{host:"127.0.0.1",port:1},b:{host:"127.0.0.1",port:2}});
+  relay.register({sessionId:id2,a:{host:"127.0.0.1",port:3},b:{host:"127.0.0.1",port:4}});
+  assert.equal(relay.activeSessionCount,2);
+  relay.unregister(id1);
+  assert.equal(relay.activeSessionCount,1);
+  await relay.stop();
+});
+
 test("BlindRelayServer drops datagrams from an unregistered sender",async()=>{
   const relay=new BlindRelayServer();
   await relay.start(0,"127.0.0.1");
@@ -87,6 +102,29 @@ test("Socks5EgressProxy relays a real TCP round trip through CONNECT",async()=>{
   assert.equal((await reply).toString(),"ping-through-egress");
 
   socket.destroy();
+  await proxy.stop();await echo.close();
+});
+
+// egress-server.ts previously had no way to report real active session
+// counts or throughput on its heartbeat — these getters are what make
+// that real.
+test("Socks5EgressProxy.activeSessionCount and totalBytesProxied reflect a real connection",async()=>{
+  const echo=await startEchoServer();
+  const proxy=new Socks5EgressProxy();
+  await proxy.start(0,"127.0.0.1");
+  const proxyPort=(proxy.address() as any).port;
+  assert.equal(proxy.activeSessionCount,0);
+
+  const socket=await socks5Connect(proxyPort,"127.0.0.1",echo.port);
+  assert.equal(proxy.activeSessionCount,1);
+  const reply=new Promise<Buffer>(resolve=>socket.once("data",resolve));
+  socket.write("count-my-bytes");
+  await reply;
+  assert.ok(proxy.totalBytesProxied>=("count-my-bytes".length*2),"should count both directions");
+
+  await new Promise<void>(resolve=>{socket.once("close",resolve);socket.destroy();});
+  await new Promise(r=>setTimeout(r,20));
+  assert.equal(proxy.activeSessionCount,0);
   await proxy.stop();await echo.close();
 });
 
