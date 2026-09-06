@@ -23,13 +23,14 @@ const startServer=()=>{
   router.add("GET","/api/v1/secure",["security-read"],async()=>({secured:true}));
   router.add("POST","/api/v1/create",["security-user"],async({body})=>{calls++;return {calls,body};},{idempotent:true});
   router.add("POST","/api/v1/limited",["security-user"],async()=>({calls:++calls}),{rateLimit:{limit:2,windowMs:60_000}});
+  router.add("POST","/api/v1/lockdown",["security-owner"],async()=>({calls:++calls}),{replayProtected:true});
   const server=createServer((req,res)=>void router.handle(req,res));
   return new Promise<{server:import("node:http").Server;port:number}>(resolve=>{
     server.listen(0,"127.0.0.1",()=>resolve({server,port:(server.address() as AddressInfo).port}));
   });
 };
 
-const call=(port:number,method:string,path:string,opts:{token?:string;body?:unknown;idempotencyKey?:string}={})=>
+const call=(port:number,method:string,path:string,opts:{token?:string;body?:unknown;idempotencyKey?:string;nonce?:string}={})=>
   new Promise<{status:number;json:any}>((resolve,reject)=>{
     const payload=opts.body!==undefined?JSON.stringify(opts.body):undefined;
     const req=request({
@@ -37,7 +38,8 @@ const call=(port:number,method:string,path:string,opts:{token?:string;body?:unkn
       headers:{
         ...(opts.token?{authorization:`Bearer ${opts.token}`}:{}),
         ...(payload?{"content-type":"application/json","content-length":Buffer.byteLength(payload)}:{}),
-        ...(opts.idempotencyKey?{"idempotency-key":opts.idempotencyKey}:{})
+        ...(opts.idempotencyKey?{"idempotency-key":opts.idempotencyKey}:{}),
+        ...(opts.nonce?{"x-request-nonce":opts.nonce}:{})
       }
     },res=>{
       const chunks:Buffer[]=[];
@@ -91,6 +93,29 @@ test("idempotency key reused with a different body is a conflict",async()=>{
     await call(port,"POST","/api/v1/create",{token:t,body:{x:1},idempotencyKey:"key-2"});
     const conflict=await call(port,"POST","/api/v1/create",{token:t,body:{x:2},idempotencyKey:"key-2"});
     assert.equal(conflict.status,409);
+  }finally{server.close();}
+});
+
+test("a replay-protected route requires an X-Request-Nonce header",async()=>{
+  const {server,port}=await startServer();
+  try{
+    const res=await call(port,"POST","/api/v1/lockdown",{token:token(["security-owner"])});
+    assert.equal(res.status,400);
+    assert.equal(res.json.error.code,"nonce_required");
+  }finally{server.close();}
+});
+
+test("a replay-protected route rejects a reused nonce but allows a fresh one",async()=>{
+  const {server,port}=await startServer();
+  try{
+    const t=token(["security-owner"]);
+    const first=await call(port,"POST","/api/v1/lockdown",{token:t,nonce:"nonce-1"});
+    assert.equal(first.status,200);
+    const replay=await call(port,"POST","/api/v1/lockdown",{token:t,nonce:"nonce-1"});
+    assert.equal(replay.status,409);
+    assert.equal(replay.json.error.code,"replay_detected");
+    const second=await call(port,"POST","/api/v1/lockdown",{token:t,nonce:"nonce-2"});
+    assert.equal(second.status,200);
   }finally{server.close();}
 });
 

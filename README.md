@@ -26,6 +26,7 @@ npm run relay               # blind UDP relay        (src/runtime/relay-server.t
 npm run egress              # SOCKS5 egress gateway   (src/runtime/egress-server.ts)
 npm run oob                 # out-of-band channel     (src/runtime/oob-server.ts)
 npm run console             # SOC/admin dashboard     (src/runtime/admin-console-server.ts)
+npm run maintenance          # outbox drain + retention (src/runtime/maintenance-worker.ts) — see Operations Manual
 npm run agent               # endpoint agent          (src/runtime/agent.ts)
 npm run audit:final         # repository self-check — see docs/UNIVERSAL-FINAL-AUDIT.md
 ```
@@ -44,7 +45,12 @@ This is a strict-TypeScript control plane with:
 
 - **Persistence**: PostgreSQL repositories, a checksum-tracked/advisory-locked
   migration runner, monthly event-partition maintenance, retention/purge SQL,
-  and encrypted `pg_dump`/`pg_restore` scripts.
+  and encrypted `pg_dump`/`pg_restore` scripts. A maintenance worker
+  (`npm run maintenance`) actually drains the transactional outbox and runs
+  retention — both existed as code for a while with nothing ever calling
+  them; also fixed the outbox's `FOR UPDATE SKIP LOCKED` to run inside a
+  transaction, since outside one the row lock was released before it could
+  do anything.
 - **APIs**: an HMAC-guarded REST API (idempotency-key replay handling,
   per-identity rate limiting, `/metrics`) and a real gRPC
   `MeshOrchestrationService` (enrollment, key rotation, streaming heartbeat).
@@ -69,7 +75,8 @@ This is a strict-TypeScript control plane with:
   X.509 CRL distribution point (`GET /api/v1/certificates/crl`), a
   cryptographically-verified Diagnostics clearance check gating node
   restore, an owner-only emergency-lockdown endpoint (isolates every active
-  node, terminates every active JIT grant), and a SOC/admin console.
+  node, terminates every active JIT grant, replay-protected via a one-time-
+  use nonce), and a SOC/admin console.
 - **Delivery**: GitHub Actions CI (build, tests including a live-Postgres
   integration test, `npm audit`, SBOM), Linux systemd + Windows (WinSW)
   endpoint-agent installers.

@@ -4,6 +4,7 @@ import {asHttpError,HttpError} from "./errors.js";
 import {HmacBearerGuard} from "./guard.js";
 import {MemoryRateLimiter, type RateLimitRule} from "./rate-limit.js";
 import {withIdempotency, MemoryIdempotencyStore, type IdempotencyStore} from "./idempotency.js";
+import {enforceReplayNonce, MemoryReplayStore, type ReplayStore} from "./replay-guard.js";
 import {metrics} from "./metrics.js";
 
 export type JsonHandler=(ctx:{
@@ -22,6 +23,11 @@ export interface RouteOptions {
   // JSON-serializable value; the router writes it directly with no
   // {requestId,data} envelope.
   raw?:boolean;
+  // Requires a one-time-use X-Request-Nonce header (enforceReplayNonce): a
+  // captured, still-valid signed request can't be resent to trigger the
+  // same side effect twice. Reserve for consequential mutations that aren't
+  // already naturally idempotent or idempotency-key-protected.
+  replayProtected?:boolean;
 }
 interface Route {method:string;pattern:RegExp;keys:string[];roles:string[];handler:JsonHandler;options:RouteOptions;}
 
@@ -31,11 +37,13 @@ export class RestRouter {
   private routes:Route[]=[];
   private limiter=new MemoryRateLimiter();
   private idempotencyStore:IdempotencyStore;
+  private replayStore:ReplayStore;
   constructor(
     private guard:HmacBearerGuard, idempotencyStore?:IdempotencyStore,
-    private exposeMetrics=false
+    private exposeMetrics=false, replayStore?:ReplayStore
   ){
     this.idempotencyStore=idempotencyStore??new MemoryIdempotencyStore();
+    this.replayStore=replayStore??new MemoryReplayStore();
   }
   add(method:string,path:string,roles:string[],handler:JsonHandler,options:RouteOptions={}){
     const keys:string[]=[];
@@ -65,6 +73,10 @@ export class RestRouter {
       if(!rateResult.allowed){
         res.setHeader("Retry-After",String(Math.ceil((rateResult.resetAt-Date.now())/1000)));
         throw new HttpError(429,"rate limit exceeded","rate_limited");
+      }
+
+      if(route.options.replayProtected){
+        await enforceReplayNonce(this.replayStore,req.headers["x-request-nonce"] as string|undefined,claims.sub);
       }
 
       const body=await this.readJson(req);

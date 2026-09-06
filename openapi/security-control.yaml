@@ -59,6 +59,10 @@ paths:
         Owner-only "ecosystem master kill switch": isolates every active mesh
         node and terminates every active JIT grant. Requires the literal
         confirmation string LOCKDOWN and a reason of at least 20 characters.
+        Also replay-protected — a captured, still-valid signed request can't
+        be resent to trigger a second lockdown.
+      parameters:
+        - {in: header, name: X-Request-Nonce, required: true, schema: {type: string}, description: One-time-use nonce; a repeat returns 409.}
       requestBody:
         required: true
         content:

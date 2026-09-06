@@ -11,7 +11,16 @@
 | Egress gateway (SOCKS5) | `src/runtime/egress-server.ts` | `npm run egress` | `0.0.0.0:1080` |
 | Out-of-band recovery channel | `src/runtime/oob-server.ts` | `npm run oob` | `127.0.0.1:8181` |
 | SOC/admin console (static UI) | `src/runtime/admin-console-server.ts` | `npm run console` | `127.0.0.1:8090` |
+| Maintenance worker (outbox drain + retention) | `src/runtime/maintenance-worker.ts` | `npm run maintenance` | n/a (background) |
 | Endpoint agent | `src/runtime/agent.ts` | `npm run agent` | n/a (client) |
+
+**Run the maintenance worker.** `TransactionalOutbox.publish()` (used by
+every `EventBus.publish()` call across this codebase) only inserts a row into
+`event_outbox` — nothing delivers it anywhere until something calls
+`OutboxDispatcher.flush()`. Without `npm run maintenance` (or the
+`maintenance-worker` compose service) running continuously, published events
+accumulate in the database forever and partition/row retention never runs.
+This is easy to miss since every other service works fine without it.
 
 Each reads its configuration from environment variables — see `.env.example`
 for the full list and `src/config.ts` for the REST API's validation rules
@@ -50,6 +59,12 @@ for the full list and `src/config.ts` for the REST API's validation rules
   Diagnostics™ would issue after investigation).
 - **Rotate a peer's WireGuard key**: gRPC `RotatePeerKey` (see
   `src/api/grpc/server.ts`).
+- **Check a zero-trust access decision**: `POST /api/v1/access/decide`
+  (`PolicyDecisionService`) — the actual Policy Decision Point a Policy
+  Enforcement Point (endpoint agent, gateway) calls before allowing traffic.
+  Device and node state are looked up server-side by ID; the response is an
+  HMAC-signed `AccessDecision` (`HmacDecisionSigner`, same secret as
+  `CONTROL_API_TOKEN_SECRET`) a PEP can verify independently.
 - **Certificate expiry**: `PgCertificateStore.expiringWithin(days)` — wire
   this into your alerting; there is no automated alert emitter in this
   repository yet.

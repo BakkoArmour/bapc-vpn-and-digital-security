@@ -4,6 +4,7 @@ import {Postgres} from "../infrastructure/postgres/client.js";
 import {PgRepositories} from "../infrastructure/postgres/repositories.js";
 import {TransactionalOutbox} from "../infrastructure/postgres/outbox.js";
 import {PgIdempotencyStore} from "../api/rest/idempotency.js";
+import {PgReplayStore} from "../api/rest/replay-guard.js";
 import {HmacBearerGuard} from "../api/rest/guard.js";
 import {RestRouter} from "../api/rest/router.js";
 import {JitService} from "../application/jit.js";
@@ -63,7 +64,7 @@ const crlBuilder=new ForgeCrlBuilder();
 const certificateStore=new PgCertificateStore(db);
 
 const guard=new HmacBearerGuard(config.controlApiTokenSecret);
-const router=new RestRouter(guard,new PgIdempotencyStore(db),true);
+const router=new RestRouter(guard,new PgIdempotencyStore(db),true,new PgReplayStore(db));
 
 router.add("GET","/api/v1/status",[],async({claims})=>({
   service:"bapc-vpn-security",version:"0.4.0",subject:claims.sub,
@@ -97,7 +98,7 @@ router.add("GET","/api/v1/soc/snapshot/full",["security-read"],async()=>socBacke
 
 router.add("POST","/api/v1/soc/emergency-lockdown",["security-owner"],async({claims,body})=>
   socBackend.emergencyLockdown(String(body.reason??""),claims.sub,String(body.confirmation??"")),
-  {rateLimit:{limit:2,windowMs:60_000}}
+  {rateLimit:{limit:2,windowMs:60_000},replayProtected:true}
 );
 
 // Real X.509 CRL distribution point. Public by design: relying parties

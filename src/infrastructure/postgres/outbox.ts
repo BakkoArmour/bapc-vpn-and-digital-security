@@ -14,20 +14,29 @@ export class TransactionalOutbox implements EventBus {
 }
 export class OutboxDispatcher {
   constructor(private db:Postgres,private send:(topic:string,event:unknown)=>Promise<void>){}
+  // `FOR UPDATE SKIP LOCKED` only provides real concurrency safety (multiple
+  // dispatcher replicas never double-deliver the same row) if the SELECT and
+  // its row locks live inside the SAME transaction as the later UPDATEs —
+  // run as a standalone statement, the lock is released the instant the
+  // SELECT completes, before this process has even started sending. Wrapping
+  // the whole flush in one transaction is what this repository's earlier
+  // (never-called) version of this method did NOT do; fixed here.
   async flush(limit=100){
-    const rows=await this.db.query(`SELECT outbox_id,topic,payload FROM bapc_security_core.event_outbox
-      WHERE published_at IS NULL ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT $1`,[limit]);
-    for(const row of rows.rows as any[]){
-      try{
-        await this.send(row.topic,row.payload);
-        await this.db.query(`UPDATE bapc_security_core.event_outbox
-          SET published_at=now(),attempt_count=attempt_count+1,last_error=NULL WHERE outbox_id=$1`,[row.outbox_id]);
-      }catch(error){
-        await this.db.query(`UPDATE bapc_security_core.event_outbox
-          SET attempt_count=attempt_count+1,last_error=$2 WHERE outbox_id=$1`,
-          [row.outbox_id,error instanceof Error?error.message:String(error)]);
+    return this.db.transaction(async client=>{
+      const rows=await client.query(`SELECT outbox_id,topic,payload FROM bapc_security_core.event_outbox
+        WHERE published_at IS NULL ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT $1`,[limit]);
+      for(const row of rows.rows as any[]){
+        try{
+          await this.send(row.topic,row.payload);
+          await client.query(`UPDATE bapc_security_core.event_outbox
+            SET published_at=now(),attempt_count=attempt_count+1,last_error=NULL WHERE outbox_id=$1`,[row.outbox_id]);
+        }catch(error){
+          await client.query(`UPDATE bapc_security_core.event_outbox
+            SET attempt_count=attempt_count+1,last_error=$2 WHERE outbox_id=$1`,
+            [row.outbox_id,error instanceof Error?error.message:String(error)]);
+        }
       }
-    }
-    return rows.rowCount??0;
+      return rows.rowCount??0;
+    });
   }
 }

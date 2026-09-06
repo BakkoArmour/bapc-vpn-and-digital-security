@@ -74,6 +74,17 @@ services:
     command: ["node", "dist/src/runtime/oob-server.js"]
     ports: ["8181:8181"]
 
+  # Drains the transactional outbox and runs partition/retention maintenance
+  # (src/runtime/maintenance-worker.ts) — without this, published events
+  # accumulate in event_outbox forever and are never delivered.
+  maintenance-worker:
+    <<: *app-image
+    environment: *control-env
+    networks: [control]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    command: ["node", "dist/src/runtime/maintenance-worker.js"]
+
   soc-console:
     <<: *app-image
     networks: [control]
