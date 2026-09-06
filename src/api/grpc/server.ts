@@ -1,10 +1,11 @@
 import {fileURLToPath} from "node:url";
 import {dirname, join} from "node:path";
+import {verify as cryptoVerify} from "node:crypto";
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import forge from "node-forge";
 import {EnrollmentService} from "../../application/enrollment.js";
-import type {NodeRepository} from "../../ports/repositories.js";
+import type {DeviceRepository, NodeRepository} from "../../ports/repositories.js";
 import type {Platform} from "../../domain/types.js";
 import {AddressAllocator, MeshController, type MeshCommandSink} from "../../../services/mesh-controller/controller.js";
 
@@ -18,9 +19,23 @@ export interface KeyRotationLedger {
 export interface GrpcMeshDeps {
   enrollment:EnrollmentService;
   nodes:NodeRepository;
+  devices:DeviceRepository;
   keyRotation:KeyRotationLedger;
   meshController:MeshController;
 }
+
+// Proves a rotation request actually came from the node that originally
+// enrolled, rather than merely someone who knows its node id and current
+// WireGuard key. Was previously not checked at all: InMemoryKeyRotationLedger
+// only required a non-empty byte array, even against the real running
+// mesh-grpc process. The node's attestation_public_key (its CSR-verified RSA
+// identity from enrollment — see enrollment.ts/publicKeyPemFromCsrDer above)
+// signs a payload binding its own id to the requested new key.
+const verifyRotationSignature=(devicePublicKeyPem:string,nodeId:string,newPublicKey:string,signature:Buffer):boolean=>{
+  if(signature.length===0)return false;
+  try{return cryptoVerify("RSA-SHA256",Buffer.from(`${nodeId}:${newPublicKey}`),devicePublicKeyPem,signature);}
+  catch{return false;}
+};
 
 // Extracts and verifies the node's proof-of-possession CSR: node-forge's
 // csr.verify() checks the CSR's self-signature against its own embedded
@@ -106,11 +121,15 @@ export const buildMeshGrpcServer=(deps:GrpcMeshDeps):grpc.Server=>{
         const req=call.request;
         const node=await deps.nodes.get(String(req.nodeId));
         if(!node)throw new Error("node not found");
+        const device=await deps.devices.get(node.deviceId);
+        if(!device?.publicAttestationKey)throw new Error("node has no enrolled identity key on record — cannot verify rotation signature");
+        const signature=Buffer.from(req.signature??[]);
+        if(!verifyRotationSignature(device.publicAttestationKey,String(req.nodeId),String(req.newPublicKey),signature)){
+          throw new Error("rotation signature does not verify against the node's enrolled identity key");
+        }
         const existing=await deps.nodes.findByPublicKey(String(req.newPublicKey));
         if(existing)throw new Error("public key already in use");
-        const result=await deps.keyRotation.rotate(
-          String(req.nodeId),String(req.newPublicKey),new Uint8Array(req.signature??[])
-        );
+        const result=await deps.keyRotation.rotate(String(req.nodeId),String(req.newPublicKey),signature);
         await deps.nodes.save({...node,wireGuardPublicKey:String(req.newPublicKey)});
         const all=await deps.nodes.list();
         await deps.meshController.reconcile({...node,wireGuardPublicKey:String(req.newPublicKey)},all);

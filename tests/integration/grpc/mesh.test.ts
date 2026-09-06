@@ -39,7 +39,7 @@ const startServer=async()=>{
     new NoopPeerDistributor(),new RandomIds(),new SystemClock()
   );
   const server=buildMeshGrpcServer({
-    enrollment,nodes:store,keyRotation:new InMemoryKeyRotationLedger(),
+    enrollment,nodes:store,devices:store,keyRotation:new InMemoryKeyRotationLedger(),
     meshController:new MeshController(new LoggingMeshCommandSink())
   });
   const port=await new Promise<number>((resolve,reject)=>{
@@ -116,7 +116,7 @@ test("gRPC registerNode with the real TrustCoreIssuer issues a certificate bindi
     new NoopPeerDistributor(),new RandomIds(),new SystemClock()
   );
   const server=buildMeshGrpcServer({
-    enrollment,nodes:store,keyRotation:new InMemoryKeyRotationLedger(),
+    enrollment,nodes:store,devices:store,keyRotation:new InMemoryKeyRotationLedger(),
     meshController:new MeshController(new LoggingMeshCommandSink())
   });
   const port=await new Promise<number>((resolve,reject)=>{

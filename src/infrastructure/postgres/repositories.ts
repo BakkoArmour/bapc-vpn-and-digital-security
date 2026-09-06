@@ -99,13 +99,18 @@ export class PgRepositories implements DeviceRepository,NodeRepository,
   }
 
   private async saveDevice(d:Device){
+    // attestation_public_key was silently dropped here — the CSR-verified
+    // identity key captured at enrollment (see enrollment.ts) never actually
+    // reached Postgres, so nothing that persisted could ever check a node's
+    // identity against it (e.g. verifying a key-rotation request really came
+    // from the node that originally enrolled — see PgKeyRotationLedger).
     await this.q(`INSERT INTO bapc_security_core.devices
-      (device_id,hostname,hardware_uuid,platform,os_version,is_compromised,is_revoked,posture,created_at,updated_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      (device_id,hostname,hardware_uuid,platform,os_version,attestation_public_key,is_compromised,is_revoked,posture,created_at,updated_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
       ON CONFLICT(device_id) DO UPDATE SET hostname=EXCLUDED.hostname,
       os_version=EXCLUDED.os_version,is_compromised=EXCLUDED.is_compromised,
       is_revoked=EXCLUDED.is_revoked,posture=EXCLUDED.posture,updated_at=EXCLUDED.updated_at`,
-      [d.id,d.hostname,d.hardwareId,d.platform,d.osVersion,d.compromised,d.revoked,d.posture,d.createdAt,d.updatedAt]);
+      [d.id,d.hostname,d.hardwareId,d.platform,d.osVersion,d.publicAttestationKey??null,d.compromised,d.revoked,d.posture,d.createdAt,d.updatedAt]);
   }
   private async saveNode(n:MeshNode){
     await this.q(`INSERT INTO bapc_security_core.mesh_nodes
@@ -136,7 +141,8 @@ export class PgRepositories implements DeviceRepository,NodeRepository,
   private device(x:any):Device{return {
     id:x.device_id,hostname:x.hostname,hardwareId:x.hardware_uuid,platform:x.platform,
     osVersion:x.os_version,compromised:x.is_compromised,revoked:x.is_revoked,
-    posture:json(x.posture),createdAt:date(x.created_at),updatedAt:date(x.updated_at)
+    posture:json(x.posture),createdAt:date(x.created_at),updatedAt:date(x.updated_at),
+    ...(x.attestation_public_key?{publicAttestationKey:x.attestation_public_key}:{})
   } as Device;}
   private node(x:any):MeshNode{return {
     id:x.node_id,deviceId:x.device_id,wireGuardPublicKey:x.public_key,

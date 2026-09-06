@@ -8,7 +8,8 @@ import {RandomIds, SystemClock} from "../infrastructure/memory.js";
 import {AllowAttestation, NoopPeerDistributor} from "../infrastructure/adapters.js";
 import {EnrollmentService} from "../application/enrollment.js";
 import {MeshController} from "../../services/mesh-controller/controller.js";
-import {buildMeshGrpcServer, InMemoryKeyRotationLedger, LoggingMeshCommandSink} from "../api/grpc/server.js";
+import {buildMeshGrpcServer, LoggingMeshCommandSink} from "../api/grpc/server.js";
+import {PgKeyRotationLedger} from "../../services/mesh-controller/pg-key-rotation-ledger.js";
 import {loadTrustAnchor} from "../../services/trust-core/trust-anchor.js";
 import {TrustCoreIssuer} from "../../services/trust-core/issuer.js";
 import {ForgeX509Builder} from "../../services/trust-core/x509-forge.js";
@@ -41,7 +42,8 @@ const enrollment=new EnrollmentService(
 const grpcServer=buildMeshGrpcServer({
   enrollment,
   nodes:repo,
-  keyRotation:new InMemoryKeyRotationLedger(),
+  devices:repo,
+  keyRotation:new PgKeyRotationLedger(db),
   meshController:new MeshController(new LoggingMeshCommandSink())
 });
 
