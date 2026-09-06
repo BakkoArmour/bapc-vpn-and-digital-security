@@ -1,6 +1,7 @@
 import {createHash} from "node:crypto";
 import type {PlatformAdapter} from "../../native/shared/platform-adapter.js";
 import {generateWireGuardKeyPair} from "../../native/shared/wireguard-keys.js";
+import {canonicalJson} from "../../src/infrastructure/canonical-json.js";
 import type {AgentReconciler} from "../../src/agent/reconciler.js";
 import type {MeshRotationClient} from "../../services/mesh-controller/grpc-rotation-client.js";
 import type {IdentitySigner} from "./identity-signer.js";
@@ -48,11 +49,50 @@ export class ProductionAgent {
   private async execute(c:{id:string;type:string;payload:any}){
     try{
       switch(c.type){
-        case "SET_KILL_SWITCH": await this.platform.setKillSwitch(Boolean(c.payload.enabled));break;
-        case "SET_DNS": await this.platform.setDns(c.payload.servers);break;
+        // SET_KILL_SWITCH/SET_DNS echo the value they just applied back in
+        // the acknowledgement (not just ok:true) so NodeReconciliationService
+        // can tell whether a node's actual kill-switch/DNS state still
+        // matches its desired state, instead of only knowing a command was
+        // received at some point in the past.
+        case "SET_KILL_SWITCH": {
+          const enabled=Boolean(c.payload.enabled);
+          await this.platform.setKillSwitch(enabled);
+          await this.controller.acknowledge(c.id,{ok:true,at:new Date().toISOString(),enabled});
+          return;
+        }
+        case "SET_DNS": {
+          await this.platform.setDns(c.payload.servers);
+          await this.controller.acknowledge(c.id,{ok:true,at:new Date().toISOString(),servers:c.payload.servers});
+          return;
+        }
         case "APPLY_WIREGUARD": await this.platform.applyWireGuard(c.payload);break;
-        case "APPLY_PEERS": await this.platform.applyPeers(c.payload.peers);break;
-        case "APPLY_FIREWALL": await this.platform.applyFirewall(c.payload);break;
+        case "APPLY_PEERS": {
+          await this.platform.applyPeers(c.payload.peers);
+          // Echoes back the hash of exactly the peer list just applied, in
+          // the same canonical serialization MeshController.planFor hashes
+          // (see applyPeersPayload, services/mesh-controller/controller.ts)
+          // — canonicalJson, not JSON.stringify, because c.payload came from
+          // controller_commands.payload (jsonb), which does not preserve
+          // object key order, so a plain JSON.stringify hash here would
+          // never match the one computed fresh in memory on the control
+          // plane even when nothing has drifted. NodeReconciliationService
+          // compares this against what the topology should currently be.
+          const topologyHash=createHash("sha256").update(canonicalJson(c.payload.peers)).digest("hex");
+          await this.controller.acknowledge(c.id,{ok:true,at:new Date().toISOString(),topologyHash});
+          return;
+        }
+        case "APPLY_FIREWALL": {
+          await this.platform.applyFirewall(c.payload);
+          // Echoes the hash of the exact rule set just applied — mirrors
+          // APPLY_PEERS's topologyHash echo above (canonicalJson for the same
+          // jsonb-key-order reason), so NodeReconciliationService can detect
+          // "this node's firewall rules are stale relative to the currently
+          // active policy set" (policy-version drift) instead of only
+          // knowing some APPLY_FIREWALL command succeeded at some point.
+          const firewallHash=createHash("sha256").update(canonicalJson(c.payload.rules??[])).digest("hex");
+          await this.controller.acknowledge(c.id,{ok:true,at:new Date().toISOString(),commitId:c.payload.commitId,firewallHash});
+          return;
+        }
         case "ROLLBACK_FIREWALL": await this.platform.rollbackFirewall(c.payload.commitId);break;
         case "QUARANTINE": await this.platform.isolate(c.payload.reason??"controller quarantine");break;
         case "RESTORE": await this.platform.restore();break;

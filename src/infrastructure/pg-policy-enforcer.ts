@@ -12,7 +12,12 @@ export interface PgQueryable {query(text:string,values?:unknown[]):Promise<{rows
 // with other implementers/tests that don't track one).
 const SYSTEM_INITIATOR="00000000-0000-0000-0000-000000000000";
 
-const firewallRulesFor=(policies:NetworkPolicy[])=>policies.map(p=>({
+// Exported for NodeReconciliationService (src/application/
+// node-reconciliation.ts), which needs to rebuild the exact same firewall
+// plan shape to re-deliver it inside a RECONCILE payload's firewallPlan
+// field (src/agent/reconciler.ts) when a node drifts, without duplicating
+// this compilation logic.
+export const firewallRulesFor=(policies:NetworkPolicy[])=>policies.map(p=>({
   id:p.id,
   // ISOLATE-action policies aren't a firewall verb; SafeApplyService/this
   // enforcer's stage/rollback path is for ALLOW/DENY rule sets — a policy

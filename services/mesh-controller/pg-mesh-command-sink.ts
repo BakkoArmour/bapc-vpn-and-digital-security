@@ -1,4 +1,4 @@
-import type {MeshCommandSink, MeshPeerPlan} from "./controller.js";
+import {applyPeersPayload, type MeshCommandSink, type MeshPeerPlan} from "./controller.js";
 import type {MeshNode} from "../../src/domain/types.js";
 import type {PgCommandQueue} from "./pg-command-queue.js";
 
@@ -22,12 +22,7 @@ export class PgMeshCommandSink implements MeshCommandSink {
   constructor(private queue:PgCommandQueue){}
 
   async configure(node:MeshNode,peers:MeshPeerPlan[]):Promise<void>{
-    await this.queue.enqueue(node.id,"APPLY_PEERS",{
-      peers:peers.map(p=>({
-        publicKey:p.publicKey,allowedIps:p.allowedIps,keepaliveSeconds:p.keepaliveSeconds,
-        ...(p.endpoint?{endpoint:p.endpoint}:{})
-      }))
-    });
+    await this.queue.enqueue(node.id,"APPLY_PEERS",{peers:applyPeersPayload(peers)});
   }
 
   async sever(nodeId:string):Promise<void>{

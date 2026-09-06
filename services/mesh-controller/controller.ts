@@ -1,6 +1,7 @@
 import {createHash} from "node:crypto";
 import type {MeshNode,SecurityZone} from "../../src/domain/types.js";
 import {RelayRoutingService, type RelayHealth} from "../../src/application/relay-routing.js";
+import {canonicalJson} from "../../src/infrastructure/canonical-json.js";
 
 export interface RelayCandidateSource {candidates():Promise<RelayHealth[]>;}
 
@@ -16,6 +17,15 @@ export interface MeshPeerPlan {
   nodeId:string;publicKey:string;endpoint?:string;allowedIps:string[];
   keepaliveSeconds:number;path:"DIRECT"|"RELAY";
 }
+// The exact shape PgMeshCommandSink.configure sends as an APPLY_PEERS
+// command's payload.peers (nodeId/path are control-plane bookkeeping the
+// node has no use for). Shared so the topology hash MeshController computes
+// and the payload actually delivered can never drift apart from each other —
+// see MeshController.planFor and ProductionAgent.execute's APPLY_PEERS case.
+export const applyPeersPayload=(peers:MeshPeerPlan[])=>peers.map(p=>({
+  publicKey:p.publicKey,allowedIps:p.allowedIps,keepaliveSeconds:p.keepaliveSeconds,
+  ...(p.endpoint?{endpoint:p.endpoint}:{})
+}));
 export class AddressAllocator {
   constructor(private leases:AddressLeaseStore){}
   async next(){
@@ -38,6 +48,19 @@ export class MeshController {
   // (unchanged behavior) — this only fills in when one wasn't given.
   constructor(private sink:MeshCommandSink,private relaySource?:RelayCandidateSource){}
   async reconcile(node:MeshNode,all:MeshNode[],relayEndpoint?:string){
+    const {peers,topologyHash}=await this.planFor(node,all,relayEndpoint);
+    await this.sink.configure(node,peers);
+    return {nodeId:node.id,peerCount:peers.length,topologyHash};
+  }
+  // Pure — computes the same peer plan/hash reconcile() would send, without
+  // sending it. NodeReconciliationService (src/application/
+  // node-reconciliation.ts) uses this to check whether a node's last
+  // successfully-applied topology hash (echoed back in its APPLY_PEERS
+  // acknowledgement — see agents/shared/production-agent.ts) still matches
+  // what the topology should be right now, so it only re-sends APPLY_PEERS
+  // when something has actually drifted instead of unconditionally
+  // resending on every check.
+  async planFor(node:MeshNode,all:MeshNode[],relayEndpoint?:string){
     const resolvedRelayEndpoint=relayEndpoint??await this.selectRelayEndpoint();
     const peers=all.filter(p=>p.active&&p.id!==node.id)
       .filter(p=>this.allowed(node.zone,p.zone))
@@ -47,9 +70,13 @@ export class MeshController {
         keepaliveSeconds:25,path:resolvedRelayEndpoint?"RELAY":"DIRECT",
         ...(resolvedRelayEndpoint?{endpoint:resolvedRelayEndpoint}:{})
       }));
-    await this.sink.configure(node,peers);
-    return {nodeId:node.id,peerCount:peers.length,
-      topologyHash:createHash("sha256").update(JSON.stringify(peers)).digest("hex")};
+    // canonicalJson, not JSON.stringify: this hash is compared against one
+    // ProductionAgent computes after reading the peer list back out of
+    // controller_commands.payload (jsonb) — jsonb does not preserve object
+    // key insertion order, so a plain JSON.stringify hash would mismatch
+    // even when nothing has actually drifted. See canonical-json.ts.
+    const topologyHash=createHash("sha256").update(canonicalJson(applyPeersPayload(peers))).digest("hex");
+    return {peers,topologyHash};
   }
   // No per-node geographic region exists anywhere in this schema (MeshNode's
   // "zone" is a security classification — ZONE_PROD_APP, ZONE_DEV — not a

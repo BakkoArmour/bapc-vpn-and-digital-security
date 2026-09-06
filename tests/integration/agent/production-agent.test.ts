@@ -46,13 +46,57 @@ const runOneHeartbeat=async(platform:FakePlatform,controller:FakeController)=>{
   await run;
 };
 
-test("ProductionAgent.execute dispatches APPLY_PEERS to PlatformAdapter.applyPeers",async()=>{
+test("ProductionAgent.execute dispatches APPLY_PEERS to PlatformAdapter.applyPeers and echoes a topologyHash",async()=>{
   const peers=[{publicKey:"pk1",allowedIps:["10.144.0.2/32"],keepaliveSeconds:25}];
   const platform=new FakePlatform();
   const controller=new FakeController([{id:"cmd-1",type:"APPLY_PEERS",payload:{peers}}]);
   await runOneHeartbeat(platform,controller);
   assert.deepEqual(platform.calls,[{method:"applyPeers",args:[peers]}]);
-  assert.equal((controller.acked[0]!.result as any).ok,true);
+  const result=controller.acked[0]!.result as any;
+  assert.equal(result.ok,true);
+  assert.match(result.topologyHash,/^[0-9a-f]{64}$/);
+});
+
+// NodeReconciliationService needs the applied value echoed back, not just
+// ok:true, to know whether a node's kill-switch/DNS state still matches its
+// desired state.
+test("ProductionAgent.execute echoes the applied value back for SET_KILL_SWITCH and SET_DNS",async()=>{
+  const platform=new FakePlatform();
+  const controller=new FakeController([
+    {id:"cmd-ks",type:"SET_KILL_SWITCH",payload:{enabled:true}},
+    {id:"cmd-dns",type:"SET_DNS",payload:{servers:["1.1.1.1","9.9.9.9"]}}
+  ]);
+  await runOneHeartbeat(platform,controller);
+  assert.equal((controller.acked[0]!.result as any).enabled,true);
+  assert.deepEqual((controller.acked[1]!.result as any).servers,["1.1.1.1","9.9.9.9"]);
+});
+
+// Regression: controller_commands.payload is jsonb, which does not preserve
+// object key insertion order — a command built with keys in one order can
+// come back out (and be delivered to the agent) with keys in a different
+// order. The echoed hash must be identical either way, or
+// NodeReconciliationService would see permanent, spurious topology drift on
+// every single check even when nothing ever actually changed.
+test("ProductionAgent.execute's APPLY_PEERS topologyHash is unaffected by the peer object's key order",async()=>{
+  const peer={publicKey:"pk1",allowedIps:["10.144.0.2/32"],keepaliveSeconds:25,endpoint:"relay:51900"};
+  const reorderedPeer={endpoint:"relay:51900",keepaliveSeconds:25,publicKey:"pk1",allowedIps:["10.144.0.2/32"]};
+  const runWith=async(peers:unknown)=>{
+    const platform=new FakePlatform();
+    const controller=new FakeController([{id:"cmd-1",type:"APPLY_PEERS",payload:{peers}}]);
+    await runOneHeartbeat(platform,controller);
+    return (controller.acked[0]!.result as any).topologyHash;
+  };
+  assert.equal(await runWith([peer]),await runWith([reorderedPeer]));
+});
+
+test("ProductionAgent.execute echoes commitId and a firewallHash for APPLY_FIREWALL",async()=>{
+  const platform=new FakePlatform();
+  const rules=[{id:"p1",action:"ALLOW",protocols:["TCP"],ports:[443],sourceZones:["ZONE_DEV"],destinationZones:["ZONE_PROD_APP"]}];
+  const controller=new FakeController([{id:"cmd-fw",type:"APPLY_FIREWALL",payload:{commitId:"commit-1",defaultAction:"DENY",rules}}]);
+  await runOneHeartbeat(platform,controller);
+  const result=controller.acked[0]!.result as any;
+  assert.equal(result.commitId,"commit-1");
+  assert.match(result.firewallHash,/^[0-9a-f]{64}$/);
 });
 
 test("ProductionAgent.execute dispatches QUARANTINE to PlatformAdapter.isolate with the given reason",async()=>{

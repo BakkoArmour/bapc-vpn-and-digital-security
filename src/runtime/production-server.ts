@@ -45,6 +45,10 @@ import {PgThreatActionPort} from "../../services/threat-engine/pg-threat-action-
 import {PgIncidentPort} from "../../services/threat-engine/pg-incident-port.js";
 import {EgressSelector} from "../../services/egress/selector.js";
 import {PgEgressStore} from "../../services/egress/pg-egress-store.js";
+import {MeshController} from "../../services/mesh-controller/controller.js";
+import {PgMeshCommandSink} from "../../services/mesh-controller/pg-mesh-command-sink.js";
+import {PgDesiredStateStore} from "../../services/mesh-controller/pg-desired-state-store.js";
+import {NodeReconciliationService} from "../application/node-reconciliation.js";
 import type {NetworkPolicy} from "../domain/types.js";
 
 await hydrateSecretsFromAws();
@@ -142,6 +146,20 @@ const relayStore=new PgRelayStore(db);
 // registration/heartbeat pattern above.
 const egressStore=new PgEgressStore(db);
 const egressSelector=new EgressSelector();
+
+// RECONCILE (src/agent/reconciler.ts) and its siblings (SET_DNS,
+// SET_KILL_SWITCH, APPLY_PEERS, APPLY_FIREWALL) had real, fully-tested node-
+// side consumers with no producer anywhere on the control plane: nothing
+// ever tracked what a node's routes/DNS/kill-switch/topology/policy version
+// SHOULD be, so nothing could ever detect that a node had drifted from it
+// and needed a correction. node_desired_state (db/016) is that record;
+// NodeReconciliationService is the comparison + correction logic — see its
+// own file for exactly what each dimension checks and why. relayStore
+// doubles as this MeshController's RelayCandidateSource, same as the
+// mesh-grpc process's own MeshController (src/api/grpc/server.ts).
+const desiredStateStore=new PgDesiredStateStore(db);
+const meshController=new MeshController(new PgMeshCommandSink(commandQueue),relayStore);
+const nodeReconciliation=new NodeReconciliationService(repo,repo,desiredStateStore,commandQueue,meshController,db);
 
 const guard=new HmacBearerGuard(config.controlApiTokenSecret);
 const router=new RestRouter(guard,new PgIdempotencyStore(db),true,new PgReplayStore(db));
@@ -306,6 +324,47 @@ router.add("POST","/api/v1/nodes/:id/dns",["security-approver"],async({claims,pa
   await audit.record(claims.sub,"DNS_SET",params.id!,{servers});
   return {queued:true,servers};
 });
+
+// node_desired_state (db/016_node_desired_state.sql) — the control plane's
+// record of what a node's routes/DNS/kill-switch/integrity files SHOULD be.
+// Every field is replaced wholesale (PUT semantics, matching PUT
+// /api/v1/policies/:id above) and revision always increments even when the
+// new values match the old ones — see PgDesiredStateStore.upsert's own
+// comment for why that's deliberate.
+router.add("PUT","/api/v1/nodes/:id/desired-state",["security-approver"],async({claims,params,body})=>{
+  const node=await repo.get(params.id!);
+  if(!node||!("wireGuardPublicKey" in node))throw new HttpError(404,"node not found","not_found");
+  const routes=Array.isArray(body.routes)?body.routes:[];
+  const dnsServers=Array.isArray(body.dnsServers)?body.dnsServers.map(String):[];
+  const integrityFiles=typeof body.integrityFiles==="object"&&body.integrityFiles?body.integrityFiles:{};
+  const state=await desiredStateStore.upsert(params.id!,{
+    routes,dnsServers,killSwitchEnabled:Boolean(body.killSwitchEnabled),integrityFiles
+  },claims.sub);
+  await audit.record(claims.sub,"DESIRED_STATE_SET",params.id!,{revision:state.revision});
+  return state;
+},{idempotent:true});
+
+router.add("GET","/api/v1/nodes/:id/desired-state",["security-read"],async({params})=>{
+  const state=await desiredStateStore.get(params.id!);
+  if(!state)throw new HttpError(404,"no desired state configured for this node","not_found");
+  return state;
+});
+
+// On-demand drift check: compares this node's desired state against what it
+// last actually reported (via command_acknowledgements) for each dimension
+// NodeReconciliationService knows about, and issues whatever corrective
+// commands are needed right now rather than waiting for the maintenance
+// worker's next periodic pass (src/runtime/maintenance-worker.ts).
+router.add("POST","/api/v1/nodes/:id/reconcile",["security-approver"],async({claims,params})=>{
+  const result=await nodeReconciliation.checkNode(params.id!);
+  const drifted=result.checked.filter(c=>c.drifted);
+  if(drifted.length>0){
+    await audit.record(claims.sub,"NODE_RECONCILED",params.id!,{
+      corrected:drifted.map(d=>({dimension:d.dimension,correctedBy:d.correctedBy}))
+    });
+  }
+  return result;
+},{rateLimit:{limit:30,windowMs:60_000}});
 
 router.add("POST","/api/v1/agent/heartbeat",["security-agent"],async({body})=>{
   const accepted=await heartbeats.accept({

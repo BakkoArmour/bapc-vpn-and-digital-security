@@ -2,6 +2,9 @@ export interface PgQueryable {
   query(text:string,values?:unknown[]):Promise<{rows:any[]}>;
 }
 export interface QueuedCommand {id:string;type:string;payload:any;}
+export interface CommandAcknowledgement {
+  commandId:string;status:string;acknowledgedAt:Date;details:any;
+}
 
 // Backs controller_commands (db/004_security_hardening.sql): the durable
 // queue an endpoint agent's heartbeat drains and acknowledges.
@@ -52,5 +55,23 @@ export class PgCommandQueue {
        VALUES($1,$2,$3,$4,now(),$5,$6)`,
       [commandId,row.node_id,row.command_type,row.issued_at,status,result??{}]
     );
+  }
+
+  // NodeReconciliationService's proxy for "what did this node last report
+  // for this dimension" — the heartbeat wire format has no general
+  // current-state field, but every command a node acts on already writes
+  // its result here (see acknowledge above), so a node's most recent
+  // successful acknowledgement for a command type is the most honest signal
+  // this architecture has for whether that command's effect is still in
+  // place, without inventing a new reporting channel.
+  async latestAcknowledgement(nodeId:string,commandType:string):Promise<CommandAcknowledgement|null>{
+    const r=await this.db.query(
+      `SELECT command_id,status,acknowledged_at,details FROM bapc_security_core.command_acknowledgements
+       WHERE node_id=$1 AND command_type=$2 AND status='SUCCEEDED'
+       ORDER BY acknowledged_at DESC LIMIT 1`,
+      [nodeId,commandType]
+    );
+    const row=r.rows[0];
+    return row?{commandId:row.command_id,status:row.status,acknowledgedAt:new Date(row.acknowledged_at),details:row.details}:null;
   }
 }
