@@ -14,7 +14,8 @@ import {JitService} from "../application/jit.js";
 import {SocService} from "../application/soc.js";
 import {ThreatResponseService} from "../application/threat-response.js";
 import {RandomIds,SystemClock} from "../infrastructure/memory.js";
-import {InMemoryEnforcer, NoopThreatSink} from "../infrastructure/adapters.js";
+import {NoopThreatSink} from "../infrastructure/adapters.js";
+import {PgPolicyEnforcer} from "../infrastructure/pg-policy-enforcer.js";
 import {HeartbeatService} from "../application/heartbeat.js";
 import {PolicyDecisionService} from "../application/policy.js";
 import {HmacDecisionSigner} from "../infrastructure/hmac-decision-signer.js";
@@ -43,9 +44,14 @@ const ids=new RandomIds(),clock=new SystemClock();
 const jit=new JitService(repo,ids,clock,bus);
 const soc=new SocService(repo,repo,repo,repo,repo,clock);
 
-// InMemoryEnforcer below is a placeholder for the real PlatformAdapter-bound
-// enforcer. See docs/CODE-ADDENDUM-INTEGRATION.md.
-const enforcer=new InMemoryEnforcer();
+// PgPolicyEnforcer.isolateNode/restoreNode enqueue into the same durable
+// command queue the REST endpoint-agent heartbeat and the mesh-grpc
+// streamHeartbeat both drain (see PgMeshCommandSink, src/api/grpc/server.ts),
+// so a quarantine actually reaches the node. stage/commit/rollback (fleet-
+// wide staged-policy bookkeeping, not yet bound to node delivery) stay
+// in-memory — see docs/CODE-ADDENDUM-INTEGRATION.md.
+const commandQueue=new PgCommandQueue(db);
+const enforcer=new PgPolicyEnforcer(commandQueue);
 const ecosystem=new EcosystemIntegrationService(config.ecosystemSecrets,bus);
 const clearance=new DiagnosticsClearanceVerifier(ecosystem);
 
@@ -73,7 +79,6 @@ const heartbeats=new HeartbeatService(repo,repo,bus,clock);
 // HmacDecisionSigner. Was previously defined but never wired into any API,
 // which meant the actual access-decision engine had no caller at all.
 const policyDecision=new PolicyDecisionService(repo,repo,ids,clock,new HmacDecisionSigner(config.controlApiTokenSecret));
-const commandQueue=new PgCommandQueue(db);
 const socBackend=new SecuritySocBackend(
   new PgSocData(db),new PgSocActions(threatResponse,repo,repo,enforcer,bus,ids,clock)
 );

@@ -10,7 +10,7 @@ import {EnrollmentService} from "../../../src/application/enrollment.js";
 import {MemoryStore, RandomIds, SystemClock} from "../../../src/infrastructure/memory.js";
 import {AllowAttestation, DevelopmentCertificateIssuer, NoopPeerDistributor} from "../../../src/infrastructure/adapters.js";
 import {MeshController} from "../../../services/mesh-controller/controller.js";
-import {buildMeshGrpcServer, InMemoryKeyRotationLedger, LoggingMeshCommandSink} from "../../../src/api/grpc/server.js";
+import {buildMeshGrpcServer, InMemoryCommandQueue, InMemoryKeyRotationLedger, LoggingMeshCommandSink} from "../../../src/api/grpc/server.js";
 import {loadTrustAnchor} from "../../../services/trust-core/trust-anchor.js";
 import {TrustCoreIssuer, type CertificateRecordStore} from "../../../services/trust-core/issuer.js";
 import {ForgeX509Builder} from "../../../services/trust-core/x509-forge.js";
@@ -38,9 +38,10 @@ const startServer=async()=>{
     store,store,store,new AllowAttestation(),new DevelopmentCertificateIssuer(),
     new NoopPeerDistributor(),new RandomIds(),new SystemClock()
   );
+  const commands=new InMemoryCommandQueue();
   const server=buildMeshGrpcServer({
     enrollment,nodes:store,devices:store,keyRotation:new InMemoryKeyRotationLedger(),
-    meshController:new MeshController(new LoggingMeshCommandSink())
+    meshController:new MeshController(new LoggingMeshCommandSink()),commands
   });
   const port=await new Promise<number>((resolve,reject)=>{
     server.bindAsync("127.0.0.1:0",grpc.ServerCredentials.createInsecure(),(error,boundPort)=>{
@@ -52,7 +53,7 @@ const startServer=async()=>{
   const client=new proto.bapc.security.v1.MeshOrchestrationService(
     `127.0.0.1:${port}`,grpc.credentials.createInsecure()
   );
-  return {server,client,port,store};
+  return {server,client,port,store,commands};
 };
 
 test("gRPC registerNode enrolls a node and returns peers",async()=>{
@@ -117,7 +118,7 @@ test("gRPC registerNode with the real TrustCoreIssuer issues a certificate bindi
   );
   const server=buildMeshGrpcServer({
     enrollment,nodes:store,devices:store,keyRotation:new InMemoryKeyRotationLedger(),
-    meshController:new MeshController(new LoggingMeshCommandSink())
+    meshController:new MeshController(new LoggingMeshCommandSink()),commands:new InMemoryCommandQueue()
   });
   const port=await new Promise<number>((resolve,reject)=>{
     server.bindAsync("127.0.0.1:0",grpc.ServerCredentials.createInsecure(),(error,boundPort)=>{
@@ -242,6 +243,39 @@ test("gRPC streamHeartbeat replies with a NOOP command per heartbeat",async()=>{
     await done;
     assert.equal(received.length,2);
     assert.equal(received[0].action,"NOOP");
+  }finally{
+    server.forceShutdown();
+  }
+});
+
+// Closes the gap where MeshController.quarantine()/reconcile() computed a
+// command but nothing ever delivered it: streamHeartbeat used to reply NOOP
+// unconditionally, ignoring any backlog. Now it drains the same durable
+// per-node command queue a quarantine (PgPolicyEnforcer.isolateNode in
+// production) or a topology reconcile (PgMeshCommandSink) would enqueue into.
+test("gRPC streamHeartbeat delivers a queued command instead of NOOP, then acknowledges it",async()=>{
+  const {server,client,commands}=await startServer();
+  try{
+    commands.enqueue("n1","QUARANTINE_NODE",{reason:"test"});
+    const call=client.streamHeartbeat();
+    const received:any[]=[];
+    const done=new Promise<void>((resolve)=>{
+      call.on("data",(cmd:any)=>{
+        received.push(cmd);
+        if(received.length===2){call.end();}
+      });
+      call.on("end",resolve);
+    });
+    call.write({nodeId:"n1",timestamp:Date.now(),postureHash:Buffer.alloc(0),bytesTransmitted:0,bytesReceived:0});
+    call.write({nodeId:"n1",timestamp:Date.now(),postureHash:Buffer.alloc(0),bytesTransmitted:0,bytesReceived:0});
+    await done;
+    assert.equal(received[0].action,"QUARANTINE_NODE");
+    const payload=JSON.parse(Buffer.from(received[0].payload).toString("utf8"));
+    assert.equal(payload.reason,"test");
+    // Delivered once — the second heartbeat (and any node the command wasn't
+    // addressed to) gets NOOP, not a repeat.
+    assert.equal(received[1].action,"NOOP");
+    assert.deepEqual(await commands.pending("n1"),[]);
   }finally{
     server.forceShutdown();
   }

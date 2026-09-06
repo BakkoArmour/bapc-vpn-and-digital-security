@@ -16,13 +16,40 @@ export interface KeyRotationLedger {
   rotate(nodeId:string,newPublicKey:string,signature:Uint8Array):Promise<{acknowledged:boolean;effectiveEpoch:number}>;
 }
 
+// Durable per-node command backlog (controller_commands via PgCommandQueue in
+// production) — the same queue the REST endpoint-agent heartbeat drains, so a
+// command reaches a node over whichever channel it happens to be connected
+// on. Kept as a narrow local port (rather than importing PgCommandQueue
+// directly) so this module doesn't take on a concrete Postgres dependency.
+export interface CommandQueue {
+  pending(nodeId:string,limit?:number):Promise<{id:string;type:string;payload:unknown}[]>;
+  acknowledge(commandId:string,result:unknown):Promise<void>;
+}
+
 export interface GrpcMeshDeps {
   enrollment:EnrollmentService;
   nodes:NodeRepository;
   devices:DeviceRepository;
   keyRotation:KeyRotationLedger;
   meshController:MeshController;
+  commands:CommandQueue;
 }
+
+const CONTROLLER_COMMAND_ACTIONS=new Set(["NOOP","RELOAD_POLICIES","ROTATE_KEYS","QUARANTINE_NODE","SEVER_ALL"]);
+
+// controller_commands is shared with the REST endpoint-agent path
+// (ProductionAgent.execute, agents/shared/production-agent.ts), which uses
+// its own command-type vocabulary ("QUARANTINE", "RESTORE", ...) rather than
+// mesh.proto's ControllerCommand.Action names — see PgPolicyEnforcer and
+// PgMeshCommandSink. Translate the ones a PolicyEnforcer/MeshController can
+// actually enqueue so a gRPC-connected node still gets a meaningful action
+// instead of silently falling back to NOOP.
+const REST_COMMAND_TO_CONTROLLER_ACTION:Record<string,string>={
+  QUARANTINE:"QUARANTINE_NODE",
+  RESTORE:"RELOAD_POLICIES"
+};
+const controllerActionFor=(commandType:string):string=>
+  CONTROLLER_COMMAND_ACTIONS.has(commandType)?commandType:REST_COMMAND_TO_CONTROLLER_ACTION[commandType]??"NOOP";
 
 // Proves a rotation request actually came from the node that originally
 // enrolled, rather than merely someone who knows its node id and current
@@ -140,9 +167,19 @@ export const buildMeshGrpcServer=(deps:GrpcMeshDeps):grpc.Server=>{
     },
 
     streamHeartbeat:(call:grpc.ServerDuplexStream<any,any>)=>{
-      call.on("data",(heartbeat:any)=>{
-        call.write({action:"NOOP",payload:Buffer.alloc(0)});
-        void heartbeat;
+      call.on("data",async(heartbeat:any)=>{
+        try{
+          const nodeId=String(heartbeat.nodeId??"");
+          const [command]=nodeId?await deps.commands.pending(nodeId,1):[];
+          if(!command){
+            call.write({action:"NOOP",payload:Buffer.alloc(0)});
+            return;
+          }
+          call.write({action:controllerActionFor(command.type),payload:Buffer.from(JSON.stringify(command.payload??{}),"utf8")});
+          await deps.commands.acknowledge(command.id,{deliveredAt:new Date().toISOString(),via:"grpc-stream-heartbeat"});
+        }catch{
+          call.write({action:"NOOP",payload:Buffer.alloc(0)});
+        }
       });
       call.on("end",()=>call.end());
       call.on("error",()=>call.end());
@@ -158,6 +195,22 @@ export class InMemoryKeyRotationLedger implements KeyRotationLedger {
     if(signature.length===0)throw new Error("rotation signature required");
     this.epoch+=1;
     return {acknowledged:true,effectiveEpoch:this.epoch};
+  }
+}
+
+// Test double for CommandQueue — mirrors PgCommandQueue's semantics (FIFO per
+// node, removed once acknowledged) without a real Postgres.
+export class InMemoryCommandQueue implements CommandQueue {
+  private byNode=new Map<string,{id:string;type:string;payload:unknown}[]>();
+  private nextId=0;
+  enqueue(nodeId:string,type:string,payload:unknown):void{
+    const list=this.byNode.get(nodeId)??[];
+    list.push({id:String(++this.nextId),type,payload});
+    this.byNode.set(nodeId,list);
+  }
+  async pending(nodeId:string,limit=20){return (this.byNode.get(nodeId)??[]).slice(0,limit);}
+  async acknowledge(commandId:string):Promise<void>{
+    for(const [nodeId,list] of this.byNode)this.byNode.set(nodeId,list.filter(c=>c.id!==commandId));
   }
 }
 

@@ -8,8 +8,10 @@ import {RandomIds, SystemClock} from "../infrastructure/memory.js";
 import {AllowAttestation, NoopPeerDistributor} from "../infrastructure/adapters.js";
 import {EnrollmentService} from "../application/enrollment.js";
 import {MeshController} from "../../services/mesh-controller/controller.js";
-import {buildMeshGrpcServer, LoggingMeshCommandSink} from "../api/grpc/server.js";
+import {buildMeshGrpcServer} from "../api/grpc/server.js";
 import {PgKeyRotationLedger} from "../../services/mesh-controller/pg-key-rotation-ledger.js";
+import {PgCommandQueue} from "../../services/mesh-controller/pg-command-queue.js";
+import {PgMeshCommandSink} from "../../services/mesh-controller/pg-mesh-command-sink.js";
 import {loadTrustAnchor} from "../../services/trust-core/trust-anchor.js";
 import {TrustCoreIssuer} from "../../services/trust-core/issuer.js";
 import {ForgeX509Builder} from "../../services/trust-core/x509-forge.js";
@@ -39,12 +41,14 @@ const enrollment=new EnrollmentService(
   new NoopPeerDistributor(),new RandomIds(),new SystemClock()
 );
 
+const commandQueue=new PgCommandQueue(db);
 const grpcServer=buildMeshGrpcServer({
   enrollment,
   nodes:repo,
   devices:repo,
   keyRotation:new PgKeyRotationLedger(db),
-  meshController:new MeshController(new LoggingMeshCommandSink())
+  meshController:new MeshController(new PgMeshCommandSink(commandQueue)),
+  commands:commandQueue
 });
 
 const grpcPort=Number(process.env.GRPC_PORT??50051);

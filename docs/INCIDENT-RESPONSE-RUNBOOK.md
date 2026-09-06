@@ -10,11 +10,18 @@ says so explicitly rather than describing a procedure that doesn't exist.
    `security-approver`, or the Quarantine button in the SOC console).
    `ThreatResponseService.handle` (`src/application/threat-response.ts`)
    marks the device compromised, terminates active JIT grants in its zone,
-   and calls `PolicyEnforcer.isolateNode` — in production this must be bound
-   to a real `PlatformAdapter`/mesh-controller isolation path
-   (`services/mesh-controller/controller.ts`'s `quarantine`), not the
-   in-memory dev `InMemoryEnforcer` that `production-server.ts` currently
-   wires by default (see `docs/CODE-ADDENDUM-INTEGRATION.md` item 5).
+   and calls `PolicyEnforcer.isolateNode` — `production-server.ts` now wires
+   this to `PgPolicyEnforcer` (`src/infrastructure/pg-policy-enforcer.ts`),
+   which enqueues a `QUARANTINE_NODE` command into the same durable command
+   queue (`controller_commands`) both the REST endpoint-agent heartbeat and
+   the mesh-grpc `streamHeartbeat` drain, so the node is actually cut off on
+   whichever channel it's connected through — not the in-memory dev
+   `InMemoryEnforcer` this used to default to (see
+   `docs/CODE-ADDENDUM-INTEGRATION.md` item 5). What still requires a real
+   `PlatformAdapter` binding is the node *acting* on that command once
+   delivered — actually tearing down its WireGuard interface/firewall rules
+   on receipt, which is native, per-platform code (see
+   `docs/UNIVERSAL-FINAL-AUDIT.md`).
 2. Confirm containment: the node should no longer appear in
    `GET /api/v1/nodes` as active, and `GET /api/v1/soc/snapshot`'s
    `compromisedDevices` count should increment.
