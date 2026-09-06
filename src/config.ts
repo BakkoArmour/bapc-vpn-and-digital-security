@@ -10,6 +10,8 @@ export interface SecurityConfig {
   bindHost:string;
   port:number;
   oobRequired:boolean;
+  oobControllerUrl:string;
+  oobSharedSecret:string;
   ecosystemSecrets:{
     diagnostics:string; headquarters:string;
     "cloud-deployment":string; integration:string;
@@ -30,8 +32,9 @@ export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
   const environment=(env.NODE_ENV as SecurityConfig["environment"])??"development";
   const secret=env.CONTROL_API_TOKEN_SECRET??"";
   const eventSecret=env.EVENT_SIGNING_SECRET??"";
-  if(environment==="production"&&(secret.length<32||eventSecret.length<32))
-    throw new Error("production control/event signing secrets must be at least 32 characters");
+  const oobSecret=env.OOB_SHARED_SECRET??"";
+  if(environment==="production"&&(secret.length<32||eventSecret.length<32||oobSecret.length<32))
+    throw new Error("production control/event signing/OOB shared secrets must be at least 32 characters");
   const production=environment==="production";
   return {
     environment,
@@ -45,6 +48,8 @@ export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
     bindHost:env.BIND_HOST??(environment==="production"?"0.0.0.0":"127.0.0.1"),
     port:int(env.PORT,8080),
     oobRequired:bool(env.OOB_REQUIRED,true),
+    oobControllerUrl:env.OOB_CONTROLLER_URL??"http://127.0.0.1:8181",
+    oobSharedSecret:env.OOB_SHARED_SECRET||"development-oob-shared-secret-change-me",
     ecosystemSecrets:{
       diagnostics:ecosystemSecret(env.DIAGNOSTICS_SHARED_SECRET,"diagnostics",production),
       headquarters:ecosystemSecret(env.HEADQUARTERS_SHARED_SECRET,"headquarters",production),

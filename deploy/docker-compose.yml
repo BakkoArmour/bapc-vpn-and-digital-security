@@ -64,7 +64,7 @@ services:
 
   control-api:
     <<: *app-image
-    environment: {<<: *control-env, BIND_HOST: "0.0.0.0", PORT: "8080"}
+    environment: {<<: *control-env, BIND_HOST: "0.0.0.0", PORT: "8080", OOB_CONTROLLER_URL: "http://oob-controller:8181"}
     networks: [control, api]
     depends_on:
       migrate: {condition: service_completed_successfully}

@@ -35,6 +35,9 @@ import {ForgeCrlBuilder} from "../../services/trust-core/crl-builder.js";
 import {PgCertificateStore} from "../../services/trust-core/pg-certificate-store.js";
 import {loadRelayFleet} from "../../services/relay-fleet/load-relay-fleet.js";
 import {PgRelayStore} from "../../services/relay-fleet/pg-relay-store.js";
+import {OobController} from "../../services/oob-controller/controller.js";
+import {HttpOobChannel} from "../../services/oob-controller/http-channel.js";
+import {PgRecoveryStore} from "../../services/oob-controller/pg-recovery-store.js";
 import type {NetworkPolicy} from "../domain/types.js";
 
 await hydrateSecretsFromAws();
@@ -78,6 +81,18 @@ const certificateIssuer=new TrustCoreCertificateIssuer(new TrustCoreIssuer(
 ));
 const threatResponse=new ThreatResponseService(
   repo,repo,repo,repo,enforcer,certificateIssuer,bus,new NoopThreatSink(),clearance
+);
+
+// OobController/PgRecoveryStore/HttpOobChannel existed fully built and
+// tested with no caller anywhere — docs/INCIDENT-RESPONSE-RUNBOOK.md's
+// "Lost controller" procedure told an operator to call
+// `OobController.rollback(scope)` with no route or CLI that could actually
+// reach it. HttpOobChannel talks to the separate oob-server.ts process
+// (its own port/secret, by design — see that file's own comment) while
+// PgRecoveryStore keeps the durable last-known-good record on this side.
+const oobController=new OobController(
+  new PgRecoveryStore(db),
+  new HttpOobChannel(config.oobControllerUrl,config.oobSharedSecret)
 );
 
 const heartbeats=new HeartbeatService(repo,repo,bus,clock);
@@ -143,6 +158,23 @@ router.add("POST","/api/v1/soc/emergency-lockdown",["security-owner"],async({cla
   socBackend.emergencyLockdown(String(body.reason??""),claims.sub,String(body.confirmation??"")),
   {rateLimit:{limit:2,windowMs:60_000},replayProtected:true}
 );
+
+// Out-of-band recovery — see docs/INCIDENT-RESPONSE-RUNBOOK.md's "Lost
+// controller" procedure. checkpoint pushes a document to the separate OOB
+// channel and records it as last-known-good only once the channel itself
+// confirms it (OobController.checkpoint refuses if the channel is
+// unhealthy or verification fails). rollback restores the last recorded
+// last-known-good for a scope — a significant recovery action, gated the
+// same as emergency lockdown.
+router.add("POST","/api/v1/oob/checkpoint",["security-approver"],async({claims,body})=>{
+  if(!body.scope||body.document===undefined)throw new HttpError(400,"scope and document are required","invalid_request");
+  return oobController.checkpoint(String(body.scope),body.document,claims.sub);
+});
+
+router.add("POST","/api/v1/oob/rollback",["security-owner"],async({body})=>{
+  if(!body.scope)throw new HttpError(400,"scope is required","invalid_request");
+  return oobController.rollback(String(body.scope));
+},{rateLimit:{limit:2,windowMs:60_000}});
 
 // Real X.509 CRL distribution point. Public by design: relying parties
 // checking a certificate's revocation status have no prior relationship

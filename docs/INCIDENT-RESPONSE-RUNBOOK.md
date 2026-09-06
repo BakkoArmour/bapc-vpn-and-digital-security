@@ -76,9 +76,14 @@ says so explicitly rather than describing a procedure that doesn't exist.
    separate port and a separate shared secret from the main API — see
    `.env.example`'s `OOB_SHARED_SECRET` note).
 2. Check the OOB channel itself first: `GET /healthz` on `OOB_PORT`.
-3. `OobController.rollback(scope)` restores the last-known-good document
-   for that scope via the OOB channel, independent of the main control
-   plane's health.
+3. `POST /api/v1/oob/rollback {"scope": "..."}` (role `security-owner`) on
+   the main control API restores the last-known-good document for that
+   scope via the OOB channel — `OobController.rollback` was previously only
+   reachable by writing code against it directly; there was no route.
+   Checkpoints are recorded ahead of time with
+   `POST /api/v1/oob/checkpoint {"scope": "...", "document": {...}}` (role
+   `security-approver`), which refuses to record one as last-known-good
+   unless the OOB channel itself confirms the push.
 4. If the OOB channel is *also* down, this repository has no further
    fallback — that is a real gap, not an oversight: a true "last resort"
    path (e.g., local last-known-good config cached on each agent) is listed
