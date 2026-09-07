@@ -192,33 +192,3 @@ export const buildMeshGrpcServer=(deps:GrpcMeshDeps):grpc.Server=>{
   return server;
 };
 
-export class InMemoryKeyRotationLedger implements KeyRotationLedger {
-  private epoch=0;
-  async rotate(_nodeId:string,_newPublicKey:string,signature:Uint8Array){
-    if(signature.length===0)throw new Error("rotation signature required");
-    this.epoch+=1;
-    return {acknowledged:true,effectiveEpoch:this.epoch};
-  }
-}
-
-// Test double for CommandQueue — mirrors PgCommandQueue's semantics (FIFO per
-// node, removed once acknowledged) without a real Postgres.
-export class InMemoryCommandQueue implements CommandQueue {
-  private byNode=new Map<string,{id:string;type:string;payload:unknown}[]>();
-  private nextId=0;
-  enqueue(nodeId:string,type:string,payload:unknown):void{
-    const list=this.byNode.get(nodeId)??[];
-    list.push({id:String(++this.nextId),type,payload});
-    this.byNode.set(nodeId,list);
-  }
-  async pending(nodeId:string,limit=20){return (this.byNode.get(nodeId)??[]).slice(0,limit);}
-  async acknowledge(commandId:string):Promise<void>{
-    for(const [nodeId,list] of this.byNode)this.byNode.set(nodeId,list.filter(c=>c.id!==commandId));
-  }
-}
-
-export interface NoopMeshCommandSink extends MeshCommandSink {}
-export class LoggingMeshCommandSink implements MeshCommandSink {
-  async configure(){/* production binds this to the real PlatformAdapter/agent command queue */}
-  async sever(){/* production binds this to the real PlatformAdapter/agent command queue */}
-}

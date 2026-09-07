@@ -11,7 +11,8 @@ import {MemoryStore, RandomIds, SystemClock} from "../../../src/infrastructure/m
 import {DevelopmentCertificateIssuer, NoopPeerDistributor} from "../../../src/infrastructure/adapters.js";
 import {DevelopmentAttestationProvider} from "../../../src/infrastructure/attestation/providers.js";
 import {MeshController} from "../../../services/mesh-controller/controller.js";
-import {buildMeshGrpcServer, InMemoryCommandQueue, InMemoryKeyRotationLedger, LoggingMeshCommandSink} from "../../../src/api/grpc/server.js";
+import {buildMeshGrpcServer} from "../../../src/api/grpc/server.js";
+import {InMemoryCommandQueue, InMemoryKeyRotationLedger, LoggingMeshCommandSink} from "./mesh-grpc-test-doubles.js";
 import {loadTrustAnchor} from "../../../services/trust-core/trust-anchor.js";
 import {TrustCoreIssuer, type CertificateRecordStore} from "../../../services/trust-core/issuer.js";
 import {ForgeX509Builder} from "../../../services/trust-core/x509-forge.js";
