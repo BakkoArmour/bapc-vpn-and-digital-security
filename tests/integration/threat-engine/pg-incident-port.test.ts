@@ -47,6 +47,39 @@ class FakeDbWithRows {
   async query(text:string,values:unknown[]=[]){this.queries.push({text,values});return {rows:this.rows};}
 }
 
+// Found live against real Postgres, not by any mocked test: a stale/
+// mistyped nodeId on a threat signal (from a caller other than
+// ThreatEngine's own trusted heartbeat path — see /api/v1/threats/signal)
+// violated incidents.primary_node_id's foreign key and crashed the whole
+// signal-ingestion request with an opaque 500.
+class FakeDbFkViolationOnce {
+  queries:Array<{text:string;values:unknown[]}>=[];
+  private calls=0;
+  async query(text:string,values:unknown[]=[]){
+    this.queries.push({text,values});
+    this.calls++;
+    if(this.calls===1){const e:any=new Error("insert or update violates foreign key constraint");e.code="23503";throw e;}
+    return {rows:[]};
+  }
+}
+
+test("open falls back to an unattributed incident when the node doesn't actually exist",async()=>{
+  const db=new FakeDbFkViolationOnce();
+  const store=new MemoryStore();
+  const port=new PgIncidentPort(db,store,new RandomIds(),new SystemClock());
+  await port.open({id:"inc-1",nodeId:"stale-node",severity:"CRITICAL",score:75,signals:[]});
+  assert.equal(db.queries.length,2);
+  assert.match(db.queries[1]!.text,/primary_node_id.*VALUES\(\$1,\$2,\$3,'OPEN',NULL,\$4\)/s);
+  const fallbackMetadata=db.queries[1]!.values[3] as any;
+  assert.equal(fallbackMetadata.unresolvedNodeId,"stale-node");
+});
+
+test("open re-throws a non-foreign-key error instead of masking it",async()=>{
+  const db={query:async()=>{throw new Error("connection terminated")}};
+  const port=new PgIncidentPort(db,new MemoryStore(),new RandomIds(),new SystemClock());
+  await assert.rejects(()=>port.open({id:"inc-1",nodeId:"n1",severity:"CRITICAL",score:75,signals:[]}),/connection terminated/);
+});
+
 test("close resolves every OPEN incident for a node and logs a resolution event",async()=>{
   const db=new FakeDbWithRows([{incident_id:"inc-1"},{incident_id:"inc-2"}]);
   const store=new MemoryStore();

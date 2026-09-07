@@ -13,16 +13,35 @@ export interface PgQueryable {query(text:string,values?:unknown[]):Promise<{rows
 export class PgIncidentPort implements IncidentPort {
   constructor(private db:PgQueryable,private events:EventRepository,private ids:IdGenerator,private clock:Clock){}
 
+  // primary_node_id is a real foreign key into mesh_nodes — correct for the
+  // normal case (this always names a node this control plane actually
+  // enrolled), but /api/v1/threats/signal accepts a caller-supplied nodeId
+  // from processes that aren't ThreatEngine's own trusted heartbeat path
+  // (DNS sinkhole hits, etc. — see that route's own comment). A stale,
+  // mistyped, or since-deleted nodeId there must not crash threat-signal
+  // ingestion entirely with an opaque 500 — found live against real
+  // Postgres, not by any test that mocks db.query. Falls back to recording
+  // the incident unattributed, with the original id preserved in metadata,
+  // rather than losing the signal altogether.
   async open(input:{id:string;nodeId?:string;severity:string;score:number;signals:unknown[]}):Promise<void>{
-    await this.db.query(
-      `INSERT INTO bapc_security_core.incidents
-         (incident_id,title,severity,status,primary_node_id,metadata)
-       VALUES($1,$2,$3,'OPEN',$4,$5)`,
-      [
-        input.id,`Correlated threat evaluation (score ${input.score})`,input.severity,
-        input.nodeId??null,{score:input.score,signalCount:input.signals.length,signals:input.signals}
-      ]
-    );
+    const metadata={score:input.score,signalCount:input.signals.length,signals:input.signals};
+    try{
+      await this.db.query(
+        `INSERT INTO bapc_security_core.incidents
+           (incident_id,title,severity,status,primary_node_id,metadata)
+         VALUES($1,$2,$3,'OPEN',$4,$5)`,
+        [input.id,`Correlated threat evaluation (score ${input.score})`,input.severity,input.nodeId??null,metadata]
+      );
+    }catch(error){
+      if(!input.nodeId||(error as {code?:string}).code!=="23503")throw error;
+      console.error(JSON.stringify({event:"incident.unattributed_node_fallback",nodeId:input.nodeId,incidentId:input.id}));
+      await this.db.query(
+        `INSERT INTO bapc_security_core.incidents
+           (incident_id,title,severity,status,primary_node_id,metadata)
+         VALUES($1,$2,$3,'OPEN',NULL,$4)`,
+        [input.id,`Correlated threat evaluation (score ${input.score})`,input.severity,{...metadata,unresolvedNodeId:input.nodeId}]
+      );
+    }
   }
 
   async close(nodeId:string,closedBy:string):Promise<number>{
