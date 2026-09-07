@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {randomUUID} from "node:crypto";
 import {PgIncidentPort} from "../../../services/threat-engine/pg-incident-port.js";
 import {MemoryStore, RandomIds, SystemClock} from "../../../src/infrastructure/memory.js";
+import {Postgres} from "../../../src/infrastructure/postgres/client.js";
 
 // incidents (db/002_operational_tables.sql) had no write path at all before
 // this — ThreatEngine.evaluate's open() had nowhere real to persist to.
@@ -99,4 +101,31 @@ test("close is a no-op with no event logged when there was nothing OPEN to resol
   const count=await port.close("n1","security-analyst-1");
   assert.equal(count,0);
   assert.equal(store.events.length,0);
+});
+
+// Every test above mocks db.query — none of them actually parse this SQL.
+// The close() query mixes a uuid column and a jsonb->>text extraction in
+// one OR'd WHERE clause against the same parameter; a live database is the
+// only thing that can confirm Postgres accepts that without a type error
+// (exactly the class of bug nodesOverdueForRotation had). This proves the
+// full round trip: an incident opened via open()'s unattributed-node
+// fallback (primary_node_id=NULL, nodeId only in metadata) is still
+// findable and resolvable by close(nodeId).
+const liveDatabaseUrl=process.env.DATABASE_URL;
+test("live: close resolves an incident opened via the unattributed-node fallback",{skip:!liveDatabaseUrl},async()=>{
+  const db=new Postgres(liveDatabaseUrl!);
+  const staleNodeId=randomUUID();
+  const incidentId=randomUUID();
+  try{
+    const store=new MemoryStore();
+    const port=new PgIncidentPort(db,store,new RandomIds(),new SystemClock());
+    // staleNodeId is never enrolled — this must hit the FK-violation fallback.
+    await port.open({id:incidentId,nodeId:staleNodeId,severity:"CRITICAL",score:75,signals:[]});
+
+    const count=await port.close(staleNodeId,"security-analyst-1");
+    assert.equal(count,1);
+  }finally{
+    await db.query(`DELETE FROM bapc_security_core.incidents WHERE incident_id=$1`,[incidentId]);
+    await db.close();
+  }
 });

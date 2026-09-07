@@ -44,10 +44,15 @@ export class PgIncidentPort implements IncidentPort {
     }
   }
 
+  // Matches on metadata->>'unresolvedNodeId' too — found live, right after
+  // adding the unattributed-node fallback above: an incident opened via
+  // that fallback has primary_node_id=NULL, so a dismiss keyed purely on
+  // that column could never close it even though the incident really is
+  // about this nodeId, just not one this control plane could FK-link it to.
   async close(nodeId:string,closedBy:string):Promise<number>{
     const r=await this.db.query(
       `UPDATE bapc_security_core.incidents SET status='RESOLVED',closed_at=$2
-       WHERE primary_node_id=$1 AND status='OPEN' RETURNING incident_id`,
+       WHERE (primary_node_id::text=$1 OR metadata->>'unresolvedNodeId'=$1) AND status='OPEN' RETURNING incident_id`,
       [nodeId,this.clock.now()]
     );
     if(r.rows.length)await this.event({
