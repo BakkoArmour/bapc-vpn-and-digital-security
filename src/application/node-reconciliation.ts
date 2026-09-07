@@ -45,7 +45,14 @@ export class NodeReconciliationService {
 
   async checkNode(nodeId:string):Promise<NodeReconciliationResult>{
     const node=await this.nodes.get(nodeId);
-    if(!node)throw new Error(`unknown node ${nodeId}`);
+    // Message must say "not found" — src/api/rest/errors.ts classifies
+    // unrecognized errors by keyword, and this exact wording ("unknown node
+    // X") fell through every pattern to a generic 500 instead of the 404 a
+    // caller hitting POST /api/v1/nodes/:id/reconcile for a real but
+    // nonexistent node should get. Found live against the running REST API,
+    // not by any unit test (which asserts on the thrown message directly,
+    // never on how the HTTP layer classifies it).
+    if(!node)throw new Error(`node not found: ${nodeId}`);
     const desired=await this.desiredState.get(nodeId);
     if(!desired)return {nodeId,checked:[]};
     const allNodes=await this.nodes.list();

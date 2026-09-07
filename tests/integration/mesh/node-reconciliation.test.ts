@@ -86,9 +86,15 @@ test("checkNode returns no findings when the node has no desired state configure
   assert.deepEqual(result.checked,[]);
 });
 
-test("checkNode throws for an unknown node",async()=>{
+// The message must say "not found" specifically — src/api/rest/errors.ts
+// classifies unhandled errors reaching the REST layer by keyword, and only
+// that wording maps this to a 404 instead of a generic 500. Found live
+// against the running API: POST /api/v1/nodes/:id/reconcile for a real but
+// nonexistent node returned 500, not 404, because the old message
+// ("unknown node X") matched none of that classifier's patterns.
+test("checkNode throws a 'not found' error for an unknown node",async()=>{
   const {service}=buildService({nodes:[]});
-  await assert.rejects(()=>service.checkNode("n1"),/unknown node/);
+  await assert.rejects(()=>service.checkNode("n1"),/node not found/);
 });
 
 test("ROUTES_AND_INTEGRITY: no drift when the last RECONCILE ack already reached the desired revision",async()=>{
