@@ -1,7 +1,7 @@
 import {KMSClient} from "@aws-sdk/client-kms";
 import {DevKeyProvider} from "./dev-key-provider.js";
 import {AwsKmsKeyProvider} from "./aws-kms-key-provider.js";
-import {selfSignWithExistingKey} from "./dev-self-signed.js";
+import {selfSignWithExistingKey, createSelfSignedDevCa} from "./dev-self-signed.js";
 import {PgDevTrustAnchorStore, type PgQueryable} from "./pg-dev-trust-anchor-store.js";
 import type {ProtectedKeyProvider} from "./issuer.js";
 
@@ -70,11 +70,12 @@ export const loadTrustAnchor=async(db:PgQueryable,env:NodeJS.ProcessEnv=process.
   // comma inside the CN value itself gets misread as a second DN attribute.
   // Both were confirmed by reproduction, not guessed.
   const subjectCn="BAPC Development CA - not for production";
+  // createSelfSignedDevCa (this exact "throwaway dev CA" case, per its own
+  // doc comment) was defined but never actually called anywhere — this
+  // duplicated its body inline instead of using it.
   const anchor=await store.loadOrCreate(keyReference,subjectCn,async()=>{
-    const dev=new DevKeyProvider();
-    dev.generate(keyReference,3072);
-    const certificatePem=await selfSignWithExistingKey(dev,subjectCn,keyReference);
-    return {certificatePem,privateKeyPem:dev.exportPrivateKeyPemForDevOnly(keyReference)};
+    const {keys,certificatePem}=await createSelfSignedDevCa(subjectCn,keyReference);
+    return {certificatePem,privateKeyPem:keys.exportPrivateKeyPemForDevOnly(keyReference)};
   });
   const keys=new DevKeyProvider();
   keys.importPrivateKeyPem(keyReference,anchor.privateKeyPem);
