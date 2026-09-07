@@ -11,7 +11,7 @@ const testNode=(id:string):MeshNode=>({
 class FakeNodeRepository {
   constructor(private nodes:MeshNode[]){}
   async list(){return this.nodes;}
-  async get(){return undefined;}
+  async get(id:string){return this.nodes.find(n=>n.id===id);}
   async findByPublicKey(){return undefined;}
   async save(){}
 }
@@ -39,7 +39,7 @@ class FakeDb {
 
 test("PgPolicyEnforcer.isolateNode enqueues QUARANTINE, the type ProductionAgent.execute implements",async()=>{
   const queue=new FakeCommandQueue();
-  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodeRepository([]) as any,new FakeDb() as any);
+  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodeRepository([testNode("node-1")]) as any,new FakeDb() as any);
   await enforcer.isolateNode("node-1");
   assert.equal(queue.enqueued.length,1);
   assert.equal(queue.enqueued[0]!.nodeId,"node-1");
@@ -48,7 +48,7 @@ test("PgPolicyEnforcer.isolateNode enqueues QUARANTINE, the type ProductionAgent
 
 test("PgPolicyEnforcer.restoreNode enqueues RESTORE, the type ProductionAgent.execute implements",async()=>{
   const queue=new FakeCommandQueue();
-  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodeRepository([]) as any,new FakeDb() as any);
+  const enforcer=new PgPolicyEnforcer(queue as any,new FakeNodeRepository([testNode("node-1")]) as any,new FakeDb() as any);
   await enforcer.restoreNode("node-1");
   assert.equal(queue.enqueued[0]!.type,"RESTORE");
 });

@@ -100,10 +100,21 @@ export class PgPolicyEnforcer implements PolicyEnforcer {
     }
   }
 
+  // controller_commands.node_id is a real foreign key into mesh_nodes —
+  // correct for the normal case, but ThreatEngine.evaluate calls isolate()
+  // for ANY nodeId a threat signal names (see PgThreatActionPort — some of
+  // those come from callers other than its own trusted heartbeat path, like
+  // POST /api/v1/threats/signal). A stale, mistyped, or since-deleted
+  // nodeId there violated the foreign key and crashed the whole request
+  // with an opaque 500 — found live against real Postgres, not by any test
+  // that mocks db.query. Nothing to isolate/restore for a node that isn't
+  // actually enrolled.
   async isolateNode(nodeId:string):Promise<void>{
+    if(!await this.nodes.get(nodeId))return;
     await this.queue.enqueue(nodeId,"QUARANTINE",{reason:"policy enforcement point"},200);
   }
   async restoreNode(nodeId:string):Promise<void>{
+    if(!await this.nodes.get(nodeId))return;
     await this.queue.enqueue(nodeId,"RESTORE",{},200);
   }
 }
