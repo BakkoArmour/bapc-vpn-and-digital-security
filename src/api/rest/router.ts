@@ -122,6 +122,20 @@ export class RestRouter {
       this.respond(res,result.status,result.body,cors);
     }catch(error){
       const e=asHttpError(error);
+      // A 500 deliberately hides its real cause from the client (asHttpError
+      // collapses anything unrecognized to a generic "internal request
+      // failure") — but before this, that meant the real error existed
+      // NOWHERE, not even server-side: an operator had no way to diagnose
+      // what actually failed short of reproducing it with a debugger
+      // attached. 4xx codes stay unlogged; those are expected, client-caused
+      // outcomes (bad auth, bad input), not operational failures.
+      if(e.status>=500){
+        console.error(JSON.stringify({
+          event:"http.internal_error",requestId,method:req.method,url:req.url,
+          error:error instanceof Error?error.message:String(error),
+          stack:error instanceof Error?error.stack:undefined
+        }));
+      }
       metrics.incrLabeled("bapc_http_errors_total",{code:e.code,status:String(e.status)});
       this.respond(res,e.status,{requestId,error:{code:e.code,message:e.message}},cors);
     }

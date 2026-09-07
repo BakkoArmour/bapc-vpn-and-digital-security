@@ -24,6 +24,7 @@ const startServer=()=>{
   router.add("POST","/api/v1/create",["security-user"],async({body})=>{calls++;return {calls,body};},{idempotent:true});
   router.add("POST","/api/v1/limited",["security-user"],async()=>({calls:++calls}),{rateLimit:{limit:2,windowMs:60_000}});
   router.add("POST","/api/v1/lockdown",["security-owner"],async()=>({calls:++calls}),{replayProtected:true});
+  router.add("GET","/api/v1/boom",[],async()=>{throw new Error("db exploded: constraint violation on foo_bar");});
   const server=createServer((req,res)=>void router.handle(req,res));
   return new Promise<{server:import("node:http").Server;port:number}>(resolve=>{
     server.listen(0,"127.0.0.1",()=>resolve({server,port:(server.address() as AddressInfo).port}));
@@ -215,4 +216,26 @@ test("rate limit trips after the configured number of requests",async()=>{
     const third=await call(port,"POST","/api/v1/limited",{token:t});
     assert.equal(third.status,429);
   }finally{server.close();}
+});
+
+// Found live against real Docker Compose: a handler throwing an
+// unrecognized error collapses to a generic 500 for the client (by design —
+// asHttpError never leaks internals), but before this, that meant the real
+// cause existed NOWHERE, not even server-side. An operator had no way to
+// diagnose a production 500 short of reproducing it locally.
+test("an unhandled handler error is logged server-side, not just returned as a generic 500",async()=>{
+  const {server,port}=await startServer();
+  const originalError=console.error;
+  const logged:string[]=[];
+  console.error=(msg:string)=>{logged.push(msg);};
+  try{
+    const res=await call(port,"GET","/api/v1/boom",{token:token([])});
+    assert.equal(res.status,500);
+    assert.equal(res.json.error.code,"internal_error");
+    assert.equal(res.json.error.message,"internal request failure");
+    assert.equal(logged.length,1);
+    const entry=JSON.parse(logged[0]!);
+    assert.equal(entry.event,"http.internal_error");
+    assert.match(entry.error,/db exploded/);
+  }finally{console.error=originalError;server.close();}
 });
