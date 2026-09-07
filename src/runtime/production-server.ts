@@ -179,6 +179,18 @@ const nodeReconciliation=new NodeReconciliationService(repo,repo,desiredStateSto
 const guard=new HmacBearerGuard(config.controlApiTokenSecret);
 const router=new RestRouter(guard,new PgIdempotencyStore(db),true,new PgReplayStore(db));
 
+// BAPC Headquarters' testConnection (bapc-headquarters' services/integrations
+// /test-connection.ts) does a plain HEAD request to productionUrl's root
+// before it ever attempts the signed handshake, purely to confirm the
+// domain/host is reachable at all. This app has no root page — every real
+// route lives under /api/* — so that check 404d even though the handshake
+// itself (GET /api/bapc/handshake) succeeded, and HQ surfaces that 404 as
+// "Last error" on an otherwise-connected integration card. Registered for
+// both methods: HEAD is what HQ's check actually sends; GET is for a human
+// opening the bare URL in a browser.
+router.add("HEAD","/",[],async()=>({}),{public:true});
+router.add("GET","/",[],async()=>({service:"bapc-vpn-security",version:"0.4.0"}),{public:true});
+
 // Was previously registered with an empty roles array and no explicit
 // {public:true} — HmacBearerGuard.verify still required a validly-signed,
 // unexpired bearer token (so this was never actually reachable
