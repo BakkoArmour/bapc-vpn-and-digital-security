@@ -75,7 +75,9 @@ test("revokeNodeCertificates does nothing gracefully when the node has no active
 
 test("rotateMeshIdentity enqueues ROTATE_IDENTITY_REQUIRED — never rotates anything itself",async()=>{
   const queue=new FakeQueue();
-  const port=new PgThreatActionPort(new MemoryStore() as any,new MemoryStore() as any,new InMemoryEnforcer() as any,new FakeCertificateStore() as any,queue as any,new MemoryBus());
+  const store=new MemoryStore();
+  await store.save(node("n1"));
+  const port=new PgThreatActionPort(store,new MemoryStore() as any,new InMemoryEnforcer() as any,new FakeCertificateStore() as any,queue as any,new MemoryBus());
   await port.rotateMeshIdentity("n1");
   assert.equal(queue.enqueued.length,1);
   assert.equal(queue.enqueued[0]!.nodeId,"n1");
@@ -87,9 +89,24 @@ test("rotateMeshIdentity enqueues ROTATE_IDENTITY_REQUIRED — never rotates any
 // up a fresh ROTATE_IDENTITY_REQUIRED row per heartbeat, forever.
 test("rotateMeshIdentity does not enqueue a second ROTATE_IDENTITY_REQUIRED while one is already pending",async()=>{
   const queue=new FakeQueue();
-  const port=new PgThreatActionPort(new MemoryStore() as any,new MemoryStore() as any,new InMemoryEnforcer() as any,new FakeCertificateStore() as any,queue as any,new MemoryBus());
+  const store=new MemoryStore();
+  await store.save(node("n1"));
+  const port=new PgThreatActionPort(store,new MemoryStore() as any,new InMemoryEnforcer() as any,new FakeCertificateStore() as any,queue as any,new MemoryBus());
   await port.rotateMeshIdentity("n1");
   await port.rotateMeshIdentity("n1");
   await port.rotateMeshIdentity("n1");
   assert.equal(queue.enqueued.length,1);
+});
+
+// controller_commands.node_id is a real foreign key into mesh_nodes —
+// ThreatEngine.evaluate calls this for any nodeId a threat signal names,
+// and not every caller of POST /api/v1/threats/signal is guaranteed to name
+// a currently-enrolled node. Found live against real Postgres: a stale
+// nodeId crashed the whole request with a foreign-key violation instead of
+// just skipping a rotation nothing could ever act on.
+test("rotateMeshIdentity does nothing for a node that isn't actually enrolled",async()=>{
+  const queue=new FakeQueue();
+  const port=new PgThreatActionPort(new MemoryStore() as any,new MemoryStore() as any,new InMemoryEnforcer() as any,new FakeCertificateStore() as any,queue as any,new MemoryBus());
+  await port.rotateMeshIdentity("does-not-exist");
+  assert.equal(queue.enqueued.length,0);
 });

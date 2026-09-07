@@ -52,8 +52,14 @@ export class PgThreatActionPort implements ThreatActionPort {
   // EMERGENCY tier on every heartbeat until an operator dismisses it — skip
   // re-enqueueing if the node already has an unacknowledged
   // ROTATE_IDENTITY_REQUIRED outstanding, instead of piling up a fresh one
-  // per evaluation.
+  // per evaluation. Also nothing to rotate for a node that isn't actually
+  // enrolled (controller_commands.node_id is a real foreign key —
+  // ThreatEngine.evaluate calls this for any nodeId a threat signal names,
+  // and not every caller of POST /api/v1/threats/signal is guaranteed to
+  // name a currently-enrolled node; found live against real Postgres, not
+  // by any test that mocks db.query).
   async rotateMeshIdentity(nodeId:string):Promise<void>{
+    if(!await this.nodes.get(nodeId))return;
     if(await this.queue.hasPending(nodeId,"ROTATE_IDENTITY_REQUIRED"))return;
     await this.queue.enqueue(nodeId,"ROTATE_IDENTITY_REQUIRED",{},200);
   }
