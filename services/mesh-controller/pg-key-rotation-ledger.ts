@@ -47,12 +47,19 @@ export class PgKeyRotationLedger implements KeyRotationLedger {
   // that has never rotated since initial enrollment has nothing in this
   // table to compare against yet — a real, narrower limitation of this
   // schema, not something worth fabricating a substitute timestamp for.
+  // $2 needs an explicit ::timestamptz cast: left untyped, Postgres can't
+  // unambiguously resolve "$2 - make_interval(...)" (both timestamptz-minus-
+  // interval and interval-minus-interval are valid overloads) and silently
+  // picks the wrong one, then fails comparing the result against
+  // last_rotated with "operator does not exist: timestamp with time zone <
+  // interval" — caught against a real Postgres instance, not by the unit
+  // tests, which mock the query and never actually parse this SQL.
   async nodesOverdueForRotation(maxAgeDays:number,now:Date):Promise<string[]>{
     const r=await this.db.query(
       `SELECT node_id FROM (
          SELECT node_id, MAX(rotated_at) AS last_rotated
          FROM bapc_security_core.key_rotations GROUP BY node_id
-       ) latest WHERE last_rotated < $2 - make_interval(days=>$1)`,
+       ) latest WHERE last_rotated < $2::timestamptz - make_interval(days=>$1)`,
       [maxAgeDays,now]
     );
     return r.rows.map((row:any)=>row.node_id);
