@@ -363,7 +363,14 @@ router.add("POST","/api/v1/nodes/:id/restore",["security-approver"],async({claim
 // with nothing anywhere that ever enqueued either command — a node could
 // receive and correctly act on them, but no operator or service could ever
 // actually send one.
+// controller_commands.node_id is a real foreign key into mesh_nodes — a
+// stale/mistyped node id here (an operator's typo, a since-deleted node)
+// previously violated it and crashed the request with an opaque 500 instead
+// of a clean 404. Found live against the running API. Same existence check
+// PUT /api/v1/nodes/:id/desired-state already uses below.
 router.add("POST","/api/v1/nodes/:id/kill-switch",["security-approver"],async({claims,params,body})=>{
+  const node=await repo.get(params.id!);
+  if(!node||!("wireGuardPublicKey" in node))throw new HttpError(404,"node not found","not_found");
   const enabled=Boolean(body.enabled);
   await commandQueue.enqueue(params.id!,"SET_KILL_SWITCH",{enabled});
   await audit.record(claims.sub,"KILL_SWITCH_SET",params.id!,{enabled});
@@ -371,6 +378,8 @@ router.add("POST","/api/v1/nodes/:id/kill-switch",["security-approver"],async({c
 });
 
 router.add("POST","/api/v1/nodes/:id/dns",["security-approver"],async({claims,params,body})=>{
+  const node=await repo.get(params.id!);
+  if(!node||!("wireGuardPublicKey" in node))throw new HttpError(404,"node not found","not_found");
   const servers=Array.isArray(body.servers)?body.servers.map(String):[];
   if(servers.length===0)throw new HttpError(400,"servers (non-empty array) is required","invalid_request");
   await commandQueue.enqueue(params.id!,"SET_DNS",{servers});
