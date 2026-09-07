@@ -51,6 +51,7 @@ import {MeshController} from "../../services/mesh-controller/controller.js";
 import {PgMeshCommandSink} from "../../services/mesh-controller/pg-mesh-command-sink.js";
 import {PgDesiredStateStore} from "../../services/mesh-controller/pg-desired-state-store.js";
 import {NodeReconciliationService} from "../application/node-reconciliation.js";
+import {verifyBapcHandshakeSignature} from "../infrastructure/bapc-handshake.js";
 import type {NetworkPolicy} from "../domain/types.js";
 
 await hydrateSecretsFromAws();
@@ -303,6 +304,41 @@ router.add("GET","/api/v1/certificates/crl",[],async()=>{
   });
   return {contentType:"application/pkix-crl",body};
 },{public:true,raw:true,rateLimit:{limit:120,windowMs:60_000}});
+
+// BAPC Headquarters' integration registry (bapc-headquarters'
+// src/infrastructure/integrations/registry.ts) calls this on every scheduled
+// or manual "test connection" health check — see verifyBapcHandshakeSignature
+// for the exact signature scheme HQ's own fetchHandshake() expects. Public:
+// HQ authenticates via its own HMAC challenge (x-bapc-nonce/x-bapc-signature),
+// not this API's normal bearer token, since HQ never enrolls as a security
+// operator. BAPC_APP_ID must exactly match the appId HQ's registry entry
+// uses for this app, or HQ's own handshake client rejects the response.
+const BAPC_APP_ID="bapc-vpn-and-digital-security";
+router.add("GET","/api/bapc/handshake",[],async({request})=>{
+  const nonce=request.headers["x-bapc-nonce"] as string|undefined;
+  const signature=request.headers["x-bapc-signature"] as string|undefined;
+  if(!verifyBapcHandshakeSignature(BAPC_APP_ID,config.ecosystemSecrets.headquarters,nonce,signature))
+    throw new HttpError(403,"invalid handshake signature","forbidden");
+  const healthy=await db.health().then(()=>true,()=>false);
+  // {raw:true}, not this router's usual {requestId,data} JSON envelope — HQ's
+  // own fetchHandshake() (bapc-headquarters' handshake.ts) reads
+  // body.bapcAppId/body.headquartersCompatible directly off the top-level
+  // parsed JSON, not nested under a wrapper key. Confirmed live against a
+  // real HQ-shaped request: the standard envelope made every field HQ
+  // checks come back undefined.
+  const body=JSON.stringify({
+    bapcAppId:BAPC_APP_ID,name:"BAPC VPN & Digital Security",version:"0.4.0",
+    environment:config.environment==="production"?"production":"development",
+    status:healthy?"healthy":"degraded",
+    headquartersCompatible:true,diagnosisCompatible:false,
+    capabilities:{
+      healthCheck:true,diagnosis:false,deploymentReporting:false,
+      databaseReporting:false,centralAuthentication:false
+    },
+    timestamp:clock.now().toISOString()
+  });
+  return {contentType:"application/json",body:Buffer.from(body)};
+},{public:true,raw:true,rateLimit:{limit:60,windowMs:60_000}});
 
 router.add("POST","/api/v1/jit",["security-user"],async({claims,body})=>
   jit.request(
