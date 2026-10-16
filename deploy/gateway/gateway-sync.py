@@ -86,7 +86,9 @@ def apply(peers):
     lines = [base.rstrip(), ""]
     for key, ips in sorted(peers.items()):
         lines += ["[Peer]", f"PublicKey = {key}", f"AllowedIPs = {', '.join(ips)}", ""]
-    with tempfile.NamedTemporaryFile("w", dir="/run", prefix="bapc-wg-", delete=False) as f:
+    # /etc/wireguard: Ubuntu's AppArmor profile for wg only lets it read
+    # config files from there.
+    with tempfile.NamedTemporaryFile("w", dir="/etc/wireguard", prefix=".bapc-sync-", suffix=".conf", delete=False) as f:
         os.chmod(f.name, 0o600)
         f.write("\n".join(lines))
         path = f.name
