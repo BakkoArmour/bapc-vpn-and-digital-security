@@ -68,7 +68,10 @@ function Install-WireGuard {
   if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "WireGuard LLC") {
     Fail "the WireGuard download didn't carry WireGuard's own digital signature, so it was not run."
   }
-  Start-Process -FilePath $installer -Wait
+  # Not Start-Process -Wait: in Windows PowerShell that also waits for the
+  # WireGuard window the installer opens afterwards, i.e. forever.
+  $proc = Start-Process -FilePath $installer -PassThru
+  $proc.WaitForExit()
   for ($i = 0; $i -lt 30 -and -not (Test-Path $WireGuardExe); $i++) { Start-Sleep -Seconds 2 }
   if (-not (Test-Path $WireGuardExe)) { Fail "WireGuard did not finish installing." }
   # The installer opens WireGuard's window; it isn't needed.
