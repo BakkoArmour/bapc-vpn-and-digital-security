@@ -1,0 +1,5 @@
+# Scripts that run on Linux hosts must keep LF endings even when archived
+# or checked out on Windows (core.autocrlf), or their shebangs break.
+*.sh text eol=lf
+*.py text eol=lf
+*.service text eol=lf
