@@ -3,11 +3,11 @@ import {dirname, join} from "node:path";
 import {verify as cryptoVerify} from "node:crypto";
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
-import forge from "node-forge";
 import {EnrollmentService} from "../../application/enrollment.js";
 import type {DeviceRepository, NodeRepository} from "../../ports/repositories.js";
 import type {Platform} from "../../domain/types.js";
 import {AddressAllocator, MeshController, type MeshCommandSink} from "../../../services/mesh-controller/controller.js";
+import {publicKeyPemFromCsrDer} from "../../infrastructure/csr.js";
 
 const __dirname=dirname(fileURLToPath(import.meta.url));
 const PROTO_PATH=join(__dirname,"..","..","..","..","contracts","mesh.proto");
@@ -58,30 +58,12 @@ const controllerActionFor=(commandType:string):string=>
 // WireGuard key. Was previously not checked at all: InMemoryKeyRotationLedger
 // only required a non-empty byte array, even against the real running
 // mesh-grpc process. The node's attestation_public_key (its CSR-verified RSA
-// identity from enrollment — see enrollment.ts/publicKeyPemFromCsrDer above)
+// identity from enrollment — see enrollment.ts/src/infrastructure/csr.ts)
 // signs a payload binding its own id to the requested new key.
 const verifyRotationSignature=(devicePublicKeyPem:string,nodeId:string,newPublicKey:string,signature:Buffer):boolean=>{
   if(signature.length===0)return false;
   try{return cryptoVerify("RSA-SHA256",Buffer.from(`${nodeId}:${newPublicKey}`),devicePublicKeyPem,signature);}
   catch{return false;}
-};
-
-// Extracts and verifies the node's proof-of-possession CSR: node-forge's
-// csr.verify() checks the CSR's self-signature against its own embedded
-// public key, confirming the node holds the matching private key without
-// that key ever leaving the node or crossing this RPC. See mesh.proto's
-// csr_der field comment for why this can't just reuse wireguard_public_key.
-const publicKeyPemFromCsrDer=(csrDer:Uint8Array):string=>{
-  if(csrDer.length===0)throw new Error("csr_der is required: submit a self-signed PKCS#10 CSR to obtain a certificate");
-  let csr:forge.pki.CertificateSigningRequest;
-  try{
-    const asn1=forge.asn1.fromDer(forge.util.createBuffer(Buffer.from(csrDer).toString("binary")));
-    csr=forge.pki.certificationRequestFromAsn1(asn1);
-  }catch{
-    throw new Error("csr_der could not be parsed as a PKCS#10 CertificationRequest");
-  }
-  if(!csr.verify())throw new Error("CSR signature does not verify against its own embedded public key");
-  return forge.pki.publicKeyToPem(csr.publicKey!);
 };
 
 const detectPlatform=(osSignature:string):Platform=>{

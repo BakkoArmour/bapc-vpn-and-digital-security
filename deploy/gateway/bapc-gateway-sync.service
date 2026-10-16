@@ -1,0 +1,17 @@
+[Unit]
+Description=BAPC VPN gateway peer sync (control plane -> wg0)
+After=wg-quick@wg0.service docker.service network-online.target
+Wants=network-online.target
+Requires=wg-quick@wg0.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/bapc-gateway/gateway-sync.py
+Restart=always
+RestartSec=5
+# Needs root for wg/iptables and to read the deploy .env; nothing else.
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -19,6 +19,11 @@ export interface SecurityConfig {
     diagnostics:string; headquarters:string;
     "cloud-deployment":string; integration:string;
   };
+  // The WireGuard exit every joining device is pointed at (deploy/gateway/).
+  // Undefined until both VPN_GATEWAY_PUBLIC_KEY and VPN_GATEWAY_ENDPOINT are
+  // set — POST /api/v1/devices/join refuses to enroll anyone until then,
+  // rather than handing out a config with nowhere to route.
+  vpnGateway?:{publicKey:string;endpoint:string;ipv4:string;ipv6:string;dns:string[]};
 }
 const int=(v:string|undefined,d:number)=>{
   const n=Number(v??d);
@@ -35,6 +40,18 @@ const ecosystemSecret=(v:string|undefined,name:string,production:boolean)=>{
   if(production&&(!v||v.length<32))
     throw new Error(`production ${name} shared secret must be set and at least 32 characters`);
   return v||`development-${name}-secret-change-me`;
+};
+const WG_KEY_RE=/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/;
+const vpnGateway=(env:NodeJS.ProcessEnv):SecurityConfig["vpnGateway"]=>{
+  const publicKey=env.VPN_GATEWAY_PUBLIC_KEY?.trim(),endpoint=env.VPN_GATEWAY_ENDPOINT?.trim();
+  if(!publicKey&&!endpoint)return undefined;
+  if(!publicKey||!WG_KEY_RE.test(publicKey))throw new Error("VPN_GATEWAY_PUBLIC_KEY must be a WireGuard public key when VPN_GATEWAY_ENDPOINT is set");
+  if(!endpoint||!/^[A-Za-z0-9.\-\[\]:]+:\d{1,5}$/.test(endpoint))throw new Error("VPN_GATEWAY_ENDPOINT must be host:port when VPN_GATEWAY_PUBLIC_KEY is set");
+  return {
+    publicKey,endpoint,
+    ipv4:env.VPN_GATEWAY_IPV4??"10.144.0.1",ipv6:env.VPN_GATEWAY_IPV6??"fd14:4b41:5043::1",
+    dns:(env.VPN_CLIENT_DNS??"1.1.1.1,1.0.0.1").split(",").map(s=>s.trim()).filter(Boolean)
+  };
 };
 const ATTESTATION_PROVIDERS=["development","windows-tpm","linux-tpm2","apple-secure-enclave"] as const;
 
@@ -59,6 +76,7 @@ export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
   // silently accepting every enrollment.
   if(production&&attestationProvider==="development")
     throw new Error("ATTESTATION_PROVIDER=development (or unset) cannot be used when NODE_ENV=production — set it to windows-tpm, linux-tpm2, or apple-secure-enclave");
+  const gateway=vpnGateway(env);
   return {
     environment,attestationProvider,
     databaseUrl:env.DATABASE_URL??"postgres://localhost/bapc_security_core",
@@ -82,6 +100,7 @@ export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
       headquarters:ecosystemSecret(env.HEADQUARTERS_SHARED_SECRET,"headquarters",production),
       "cloud-deployment":ecosystemSecret(env.CLOUD_DEPLOYMENT_SHARED_SECRET,"cloud-deployment",production),
       integration:ecosystemSecret(env.INTEGRATION_SHARED_SECRET,"integration",production)
-    }
+    },
+    ...(gateway?{vpnGateway:gateway}:{})
   };
 };

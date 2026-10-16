@@ -53,6 +53,11 @@ import {PgDesiredStateStore} from "../../services/mesh-controller/pg-desired-sta
 import {NodeReconciliationService} from "../application/node-reconciliation.js";
 import {verifyBapcHandshakeSignature} from "../infrastructure/bapc-handshake.js";
 import type {NetworkPolicy} from "../domain/types.js";
+import {EnrollmentService} from "../application/enrollment.js";
+import {DeviceJoinService} from "../application/device-join.js";
+import {PgEnrollmentInviteStore} from "../infrastructure/pg-enrollment-invites.js";
+import {buildAttestationVerifier} from "../infrastructure/attestation/attestation-verifier.js";
+import {NoopPeerDistributor} from "../infrastructure/adapters.js";
 
 await hydrateSecretsFromAws();
 const config=loadConfig();
@@ -644,6 +649,45 @@ router.add("GET","/api/v1/egress/select",["security-agent"],async({query})=>{
   catch{throw new HttpError(503,"no healthy egress gateway is currently registered","not_configured");}
   return {gatewayId:selected.id,fixedIp:selected.fixedIp,region:selected.region};
 });
+
+// Device join — the public, invite-gated way a customer device enrolls (see
+// src/application/device-join.ts). Same EnrollmentService and the same real
+// ATTESTATION_PROVIDER the gRPC path uses, but NoopPeerDistributor instead
+// of MeshControllerPeerDistributor: customer devices are hub-and-spoke
+// behind the VPN gateway, so a new one joining must not push its key and
+// address to every other customer device.
+const deviceJoin=new DeviceJoinService(
+  new PgEnrollmentInviteStore(db),
+  new EnrollmentService(
+    repo,repo,repo,buildAttestationVerifier(config.attestationProvider,config.environment),certificateIssuer,
+    new NoopPeerDistributor(),ids,clock,config.certificateTtlMinutes
+  ),
+  repo,config.vpnGateway,clock
+);
+// Public by design — a device that hasn't joined has no bearer token. The
+// one-time invite code in the body is the credential; the global rate limit
+// (every unauthenticated caller shares one bucket) caps guessing at 10/min
+// against a 120-bit code space.
+router.add("POST","/api/v1/devices/join",[],async({body})=>{
+  if(!config.vpnGateway)throw new HttpError(503,"the VPN gateway is not configured yet","not_configured");
+  const result=await deviceJoin.join(body);
+  await audit.record("device-join","DEVICE_JOINED",result.nodeId,{hostname:String(body.hostname??"")});
+  return result;
+},{public:true,rateLimit:{limit:10,windowMs:60_000}});
+
+router.add("POST","/api/v1/devices/invites",["security-owner"],async({claims,body})=>{
+  const invite=await deviceJoin.mintInvite(claims.sub,{
+    ...(body.hours!==undefined?{hours:Number(body.hours)}:{}),label:String(body.label??"")
+  });
+  await audit.record(claims.sub,"DEVICE_INVITE_MINTED",invite.inviteId,{expiresAt:invite.expiresAt.toISOString()});
+  return invite;
+},{rateLimit:{limit:10,windowMs:60_000}});
+
+// What the WireGuard gateway host's sync loop (deploy/gateway/
+// gateway-sync.py) applies to wg0: active, non-revoked, non-compromised
+// devices only.
+router.add("GET","/api/v1/gateway/peers",["security-agent"],async()=>deviceJoin.gatewayPeers(repo),
+  {rateLimit:{limit:120,windowMs:60_000}});
 
 const server=createServer((req,res)=>void router.handle(req,res));
 server.requestTimeout=15_000;
