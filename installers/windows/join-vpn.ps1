@@ -275,18 +275,19 @@ Say "Connecting..."
 Start-Sleep -Seconds 2
 & $WireGuardExe /installtunnelservice $ConfPath
 
+# The tunnel service reports "installed" before its routes are in place,
+# so a single early check can still see the old path. Keep checking until
+# the exit address IS the gateway, for up to ~60s, before giving up.
 $publicIp = $null
-for ($i = 0; $i -lt 15; $i++) {
+for ($i = 0; $i -lt 30; $i++) {
   Start-Sleep -Seconds 2
-  try { $publicIp = (Invoke-RestMethod -Uri "https://api.ipify.org?format=json" -TimeoutSec 5).ip; break } catch {}
-}
-if (-not $publicIp) {
-  & $WireGuardExe /uninstalltunnelservice $TunnelName 2>$null
-  Fail "the VPN started but no internet came through it, so it was switched off again. Your internet is back to normal."
+  try { $publicIp = (Invoke-RestMethod -Uri "https://api.ipify.org?format=json" -TimeoutSec 5).ip } catch { $publicIp = $null }
+  if ($publicIp -eq $endpointHost) { break }
 }
 if ($publicIp -ne $endpointHost) {
   & $WireGuardExe /uninstalltunnelservice $TunnelName 2>$null
-  Fail "internet traffic was not going through the VPN (seen as $publicIp), so it was switched off again."
+  if ($publicIp) { Fail "internet traffic was not going through the VPN (seen as $publicIp), so it was switched off again." }
+  Fail "the VPN started but no internet came through it, so it was switched off again. Your internet is back to normal."
 }
 
 Write-Host ""

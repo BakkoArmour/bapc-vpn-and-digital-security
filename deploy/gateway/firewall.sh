@@ -6,7 +6,7 @@
 #   * go OUT to the internet via the server's public interface (NAT'd)
 #   * receive replies to its own connections
 # What it may NOT do:
-#   * reach any service on this host (sshd, Docker-published ports, ...)
+#   * reach any service on this host except sshd (already public anyway)
 #   * reach Docker's internal bridge networks
 #   * reach any other VPN customer (hub-and-spoke, no client-to-client)
 #
@@ -61,6 +61,10 @@ setup_family() { # cmd egress-allowed(0/1)
 
   $cmd -N BAPC-WG-IN
   $cmd -A BAPC-WG-IN -i "$IFACE" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+  # SSH is already open to the whole internet (ufw OpenSSH); without this,
+  # an operator whose own PC is on the VPN is locked out of the gateway,
+  # because their packets to its public IP now arrive via wg0.
+  $cmd -A BAPC-WG-IN -i "$IFACE" -p tcp --dport 22 -j ACCEPT
   if [ "$cmd" = iptables ]; then
     $cmd -A BAPC-WG-IN -i "$IFACE" -p icmp --icmp-type echo-request -j ACCEPT
   else
