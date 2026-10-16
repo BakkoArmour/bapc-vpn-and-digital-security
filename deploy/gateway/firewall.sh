@@ -1,6 +1,6 @@
 #!/bin/sh
-# BAPC VPN gateway packet rules — run by wg-quick as PostUp/PostDown
-# (see wg0.conf written by setup-gateway.sh):  firewall.sh up|down <iface>
+# BAPC VPN gateway packet rules — run by bapc-gateway-firewall.service
+# whenever wg0 comes up or goes down:  firewall.sh up|down <iface>
 #
 # What a joined device may do through the tunnel:
 #   * go OUT to the internet via the server's public interface (NAT'd)
@@ -15,7 +15,7 @@
 # INPUT, so neither Docker's nor ufw's rule ordering can let tunnel traffic
 # slip past them.
 set -eu
-ACTION="$1"; IFACE="${2:-wg0}"
+ACTION="${1:-}"; IFACE="${2:-wg0}"
 WAN="$(ip -4 route show default | awk '/default/ {print $5; exit}')"
 [ -n "$WAN" ] || { echo "no IPv4 default route" >&2; exit 1; }
 V4_NET="10.144.0.0/16"

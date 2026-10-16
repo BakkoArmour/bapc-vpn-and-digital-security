@@ -43,8 +43,6 @@ PUBKEY="$(wg pubkey < /etc/wireguard/$IFACE.key)"
 Address = 10.144.0.1/16, fd14:4b41:5043::1/64
 ListenPort = $PORT
 PrivateKey = $(cat /etc/wireguard/$IFACE.key)
-PostUp = $LIB/firewall.sh up %i
-PostDown = $LIB/firewall.sh down %i
 EOF
 )
 
@@ -60,10 +58,12 @@ sysctl -q -p /etc/sysctl.d/99-bapc-gateway.conf
 
 ufw allow $PORT/udp comment 'BAPC VPN WireGuard' >/dev/null
 
+install -m 644 "$HERE/bapc-gateway-firewall.service" /etc/systemd/system/bapc-gateway-firewall.service
 install -m 644 "$HERE/bapc-gateway-sync.service" /etc/systemd/system/bapc-gateway-sync.service
 systemctl daemon-reload
-systemctl enable -q wg-quick@$IFACE
+systemctl enable -q wg-quick@$IFACE bapc-gateway-firewall
 systemctl restart wg-quick@$IFACE
+systemctl restart bapc-gateway-firewall
 systemctl enable -q bapc-gateway-sync
 systemctl restart bapc-gateway-sync
 

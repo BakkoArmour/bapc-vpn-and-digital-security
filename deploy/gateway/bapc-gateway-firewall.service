@@ -1,0 +1,17 @@
+[Unit]
+Description=BAPC VPN gateway packet rules for wg0 (see firewall.sh)
+# Not wg-quick PostUp/PostDown: Ubuntu's AppArmor profile for wg-quick
+# refuses to exec scripts outside its own allow-list. Tied to wg0's
+# lifecycle here instead.
+After=wg-quick@wg0.service docker.service
+BindsTo=wg-quick@wg0.service
+PartOf=wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/bapc-gateway/firewall.sh up wg0
+ExecStop=/usr/local/lib/bapc-gateway/firewall.sh down wg0
+
+[Install]
+WantedBy=wg-quick@wg0.service
