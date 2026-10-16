@@ -56,6 +56,7 @@ import type {NetworkPolicy} from "../domain/types.js";
 import {EnrollmentService} from "../application/enrollment.js";
 import {DeviceJoinService} from "../application/device-join.js";
 import {PgEnrollmentInviteStore} from "../infrastructure/pg-enrollment-invites.js";
+import {PgCustomerStore} from "../infrastructure/pg-customer-store.js";
 import {buildAttestationVerifier} from "../infrastructure/attestation/attestation-verifier.js";
 import {NoopPeerDistributor} from "../infrastructure/adapters.js";
 
@@ -656,13 +657,14 @@ router.add("GET","/api/v1/egress/select",["security-agent"],async({query})=>{
 // of MeshControllerPeerDistributor: customer devices are hub-and-spoke
 // behind the VPN gateway, so a new one joining must not push its key and
 // address to every other customer device.
+const customerStore=new PgCustomerStore(db);
 const deviceJoin=new DeviceJoinService(
   new PgEnrollmentInviteStore(db),
   new EnrollmentService(
     repo,repo,repo,buildAttestationVerifier(config.attestationProvider,config.environment),certificateIssuer,
     new NoopPeerDistributor(),ids,clock,config.certificateTtlMinutes
   ),
-  repo,config.vpnGateway,clock
+  repo,config.vpnGateway,clock,customerStore
 );
 // Public by design — a device that hasn't joined has no bearer token. The
 // one-time invite code in the body is the credential; the global rate limit
@@ -685,8 +687,8 @@ router.add("POST","/api/v1/devices/invites",["security-owner"],async({claims,bod
 
 // What the WireGuard gateway host's sync loop (deploy/gateway/
 // gateway-sync.py) applies to wg0: active, non-revoked, non-compromised
-// devices only.
-router.add("GET","/api/v1/gateway/peers",["security-agent"],async()=>deviceJoin.gatewayPeers(repo),
+// devices only, minus customer devices paused for non-payment or removed.
+router.add("GET","/api/v1/gateway/peers",["security-agent"],async()=>deviceJoin.gatewayPeers(repo,await customerStore.suspendedNodeIds()),
   {rateLimit:{limit:120,windowMs:60_000}});
 
 const server=createServer((req,res)=>void router.handle(req,res));

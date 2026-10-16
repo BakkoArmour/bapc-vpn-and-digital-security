@@ -98,6 +98,31 @@ services:
     ports: ["8080:8080"]
     healthcheck: {test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"], interval: 15s, timeout: 5s, retries: 5}
 
+  # vpn.bapc.app: pricing, Sign in with BAPC, customer accounts and devices
+  # (src/runtime/customer-portal.ts). Reached only through the Cloudflare
+  # tunnel; like everything else, published on 127.0.0.1 only on the server.
+  customer-portal:
+    <<: *app-image
+    environment:
+      <<: *control-env
+      PORTAL_BIND_HOST: "0.0.0.0"
+      PORTAL_PORT: "8095"
+      PORTAL_PUBLIC_ORIGIN: ${PORTAL_PUBLIC_ORIGIN:-https://vpn.bapc.app}
+      BAPC_IDENTITY_URL: ${BAPC_IDENTITY_URL:-https://bapc.app}
+      BAPC_CLIENT_SECRET: ${BAPC_CLIENT_SECRET:-}
+      BAPC_BILLING_URL: ${BAPC_BILLING_URL:-https://billing.bapc.app}
+      BAPC_BILLING_KEY: ${BAPC_BILLING_KEY:-}
+      VPN_GATEWAY_PUBLIC_KEY: ${VPN_GATEWAY_PUBLIC_KEY:-}
+      VPN_GATEWAY_ENDPOINT: ${VPN_GATEWAY_ENDPOINT:-}
+      VPN_CLIENT_DNS: ${VPN_CLIENT_DNS:-1.1.1.1,1.0.0.1}
+    # egress: it calls bapc.app (sign-in) and billing.bapc.app (payments).
+    networks: [control, api, egress]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    command: ["node", "dist/src/runtime/customer-portal.js"]
+    ports: ["8095:8095"]
+    healthcheck: {test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8095/healthz"], interval: 15s, timeout: 5s, retries: 5}
+
   mesh-grpc:
     <<: *app-image
     environment: {<<: *control-env, BIND_HOST: "0.0.0.0", GRPC_PORT: "50051"}

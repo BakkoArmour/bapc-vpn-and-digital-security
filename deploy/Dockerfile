@@ -39,7 +39,9 @@ COPY package.json ./package.json
 COPY contracts ./contracts
 COPY apps/security-soc/public ./apps/security-soc/public
 COPY db ./db
+# The customer portal serves the Windows installer at /install/join-vpn.ps1.
+COPY installers/windows/join-vpn.ps1 ./installers/windows/join-vpn.ps1
 USER bapc
 ENV NODE_ENV=production
-EXPOSE 8080 50051 51900 1080 8181 8090
+EXPOSE 8080 8095 50051 51900 1080 8181 8090
 CMD ["node","dist/src/runtime/production-server.js"]

@@ -19,10 +19,14 @@ import {publicKeyPemFromCsrDer} from "../infrastructure/csr.js";
 // peer, the VPN gateway, with a full-tunnel route. Customer devices never
 // learn each other's keys or addresses.
 
+// A customer's invite (minted from the customer portal) carries who it's
+// for, so the device that redeems it lands in that customer's device list.
+export interface InviteAccount {accountId:string;email:string;deviceName:string;}
+
 export interface EnrollmentInviteStore {
-  create(invite:{codeHash:string;expiresAt:Date;createdBy:string;label:string}):Promise<{inviteId:string}>;
+  create(invite:{codeHash:string;expiresAt:Date;createdBy:string;label:string;account?:InviteAccount}):Promise<{inviteId:string}>;
   // Atomically marks an unexpired, unused invite as used; null otherwise.
-  claim(codeHash:string,now:Date):Promise<string|null>;
+  claim(codeHash:string,now:Date):Promise<{inviteId:string;account?:InviteAccount}|null>;
   release(inviteId:string):Promise<void>;
   bindNode(inviteId:string,nodeId:string):Promise<void>;
 }
@@ -30,6 +34,20 @@ export interface EnrollmentInviteStore {
 export interface VpnGatewayConfig {
   publicKey:string;endpoint:string;ipv4:string;ipv6:string;dns:string[];
 }
+
+export interface CustomerDeviceRecorder {
+  record(nodeId:string,account:InviteAccount,kind:string):Promise<void>;
+}
+
+// Next free tunnel address pair, never the gateway's own.
+export const leaseAddress=(nodes:NodeRepository,gateway:VpnGatewayConfig)=>new AddressAllocator({
+  usedIpv4:async()=>new Set([...(await nodes.list()).map(n=>n.internalIpv4),gateway.ipv4]),
+  usedIpv6:async()=>new Set([...(await nodes.list()).map(n=>n.internalIpv6),gateway.ipv6])
+}).next();
+
+export const gatewayPeerFor=(gateway:VpnGatewayConfig)=>({
+  publicKey:gateway.publicKey,endpoint:gateway.endpoint,allowedIps:["0.0.0.0/0","::/0"],keepaliveSeconds:25
+});
 
 export interface DeviceJoinRequest {
   inviteCode:string;hostname?:string;hardwareUuid:string;osSignature:string;
@@ -88,14 +106,15 @@ const requireString=(value:unknown,field:string,max:number):string=>{
 // (src/runtime/mint-invite.ts). The plaintext code is returned exactly once
 // and only its hash is stored.
 export const mintInvite=async(
-  invites:EnrollmentInviteStore,clock:Clock,createdBy:string,opts:{hours?:number;label?:string}={}
+  invites:EnrollmentInviteStore,clock:Clock,createdBy:string,opts:{hours?:number;label?:string;account?:InviteAccount}={}
 ):Promise<{inviteId:string;code:string;expiresAt:Date}>=>{
   const hours=opts.hours??24;
   if(!Number.isFinite(hours)||hours<=0||hours>24*14)throw new ValidationError("invite lifetime must be between 0 and 336 hours");
   const code=generateInviteCode();
   const expiresAt=new Date(clock.now().getTime()+hours*3_600_000);
   const {inviteId}=await invites.create({
-    codeHash:hashInviteCode(code),expiresAt,createdBy,label:String(opts.label??"").slice(0,200)
+    codeHash:hashInviteCode(code),expiresAt,createdBy,label:String(opts.label??"").slice(0,200),
+    ...(opts.account?{account:opts.account}:{})
   });
   return {inviteId,code,expiresAt};
 };
@@ -106,21 +125,26 @@ export class DeviceJoinService {
     private enrollment:EnrollmentService,
     private nodes:NodeRepository,
     private gateway:VpnGatewayConfig|undefined,
-    private clock:Clock
+    private clock:Clock,
+    private customers?:CustomerDeviceRecorder
   ){}
 
-  mintInvite(createdBy:string,opts:{hours?:number;label?:string}={}){
+  mintInvite(createdBy:string,opts:{hours?:number;label?:string;account?:InviteAccount}={}){
     return mintInvite(this.invites,this.clock,createdBy,opts);
   }
 
   // Peers the gateway should have right now: every active node whose
   // device isn't revoked or flagged compromised. A quarantine or revocation
   // drops the device from this list, and the gateway's sync loop drops it
-  // from wg0 on its next pass.
-  async gatewayPeers(devices:{listAll():Promise<Array<{id:string;revoked:boolean;compromised:boolean}>>}){
+  // from wg0 on its next pass. suspendedNodeIds: customer devices whose
+  // account has stopped paying (customer_devices.suspended).
+  async gatewayPeers(
+    devices:{listAll():Promise<Array<{id:string;revoked:boolean;compromised:boolean}>>},
+    suspendedNodeIds:Set<string>=new Set()
+  ){
     const blocked=new Set((await devices.listAll()).filter(d=>d.revoked||d.compromised).map(d=>d.id));
     return (await this.nodes.list())
-      .filter(n=>n.active&&!blocked.has(n.deviceId))
+      .filter(n=>n.active&&!blocked.has(n.deviceId)&&!suspendedNodeIds.has(n.id))
       .map(n=>({nodeId:n.id,publicKey:n.wireGuardPublicKey,allowedIps:[`${n.internalIpv4}/32`,`${n.internalIpv6}/128`]}));
   }
 
@@ -148,16 +172,13 @@ export class DeviceJoinService {
       throw new ValidationError(error instanceof Error?error.message:"csrDer is invalid");
     }
 
-    const inviteId=await this.invites.claim(hashInviteCode(inviteCode),this.clock.now());
-    if(!inviteId)throw new AuthorizationError("invite code is not valid, has expired, or was already used");
+    const claimed=await this.invites.claim(hashInviteCode(inviteCode),this.clock.now());
+    if(!claimed)throw new AuthorizationError("invite code is not valid, has expired, or was already used");
+    const {inviteId,account}=claimed;
 
     try{
       const gateway=this.gateway;
-      const allocator=new AddressAllocator({
-        usedIpv4:async()=>new Set([...(await this.nodes.list()).map(n=>n.internalIpv4),gateway.ipv4]),
-        usedIpv6:async()=>new Set([...(await this.nodes.list()).map(n=>n.internalIpv6),gateway.ipv6])
-      });
-      const lease=await allocator.next();
+      const lease=await leaseAddress(this.nodes,gateway);
       const result=await this.enrollment.register({
         hostname,hardwareId:hardwareUuid,
         platform:/windows/i.test(osSignature)?"windows":/darwin|mac/i.test(osSignature)?"macos":"linux",
@@ -166,11 +187,12 @@ export class DeviceJoinService {
         zone:"ZONE_PROD_APP"
       });
       await this.invites.bindNode(inviteId,result.node.id);
+      if(account&&this.customers)await this.customers.record(result.node.id,account,"windows");
       return {
         nodeId:result.node.id,
         addresses:{ipv4:result.node.internalIpv4,ipv6:result.node.internalIpv6},
         certificatePem:result.certificate.certificatePem,
-        gateway:{publicKey:gateway.publicKey,endpoint:gateway.endpoint,allowedIps:["0.0.0.0/0","::/0"],keepaliveSeconds:25},
+        gateway:gatewayPeerFor(gateway),
         dns:gateway.dns
       };
     }catch(error){

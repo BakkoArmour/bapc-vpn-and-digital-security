@@ -23,7 +23,7 @@
 #>
 param(
   [string]$InviteCode,
-  [string]$ServerUrl = "https://vpn.bapc-headquarters.com",
+  [string]$ServerUrl = "https://vpn.bapc.app",
   [switch]$Disconnect,
   # Testing aid: join and write the tunnel config, but don't install
   # anything (works without admin rights).
