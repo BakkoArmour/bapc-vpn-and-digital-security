@@ -17,6 +17,8 @@ WorkingDirectory=/opt/bapc-vpn-native/%i/current
 EnvironmentFile=/etc/bapc-vpn/%i.env
 Environment=NODE_ENV=production
 Restart=on-failure
+# Services stop on SIGTERM; a loop sleeping between runs must not hold a restart for systemd's default 90 s.
+TimeoutStopSec=15
 RestartSec=3
 # Hardening: an unprivileged user, no new privileges, a read-only system and no home directories.
 NoNewPrivileges=yes

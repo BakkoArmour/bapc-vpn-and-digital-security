@@ -45,7 +45,8 @@ role_exists=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='
 if [ -z "$role_exists" ]; then
   PW=$(openssl rand -hex 24)
   # CREATEDB: the nightly backup restores into a throwaway database to prove the copy works.
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -q -c "CREATE ROLE $ROLE LOGIN CREATEDB PASSWORD '$PW'"
+  # The SQL goes in on standard input, never as an argument: sudo logs its command line, and a password must not be in a log.
+  printf "CREATE ROLE %s LOGIN CREATEDB PASSWORD '%s';\n" "$ROLE" "$PW" | sudo -u postgres psql -v ON_ERROR_STOP=1 -q
   log "role $ROLE created"
 else
   PW=""
@@ -59,14 +60,17 @@ if [ "$INSTANCE" = staging ] && [ ! -s "$ENV_FILE" ]; then
   r(){ openssl rand -hex 32; }
   umask 027
   sed -e "s|^DATABASE_URL=.*|DATABASE_URL=postgres://$ROLE:$PW@127.0.0.1:5432/$DB|" \
-      -e "s|^\(CONTROL_API_TOKEN_SECRET\|EVENT_SIGNING_SECRET\|OOB_SHARED_SECRET\|DIAGNOSTICS_SHARED_SECRET\|HEADQUARTERS_SHARED_SECRET\|CLOUD_DEPLOYMENT_SHARED_SECRET\|INTEGRATION_SHARED_SECRET\)=$|&__R__|" \
       -e "s|^PORT=8080|PORT=18080|; s|^PORTAL_PORT=8095|PORTAL_PORT=18095|; s|^GRPC_PORT=50051|GRPC_PORT=60051|; s|^OOB_PORT=8181|OOB_PORT=18181|" \
       -e "s|^OOB_CONTROLLER_URL=.*|OOB_CONTROLLER_URL=http://127.0.0.1:18181|; s|^ADMIN_CONSOLE_PORT=8090|ADMIN_CONSOLE_PORT=18090|; s|^DNS_PORT=5353|DNS_PORT=15353|" \
       -e "s|^RELAY_PORT=51900|RELAY_PORT=61900|; s|^EGRESS_PORT=1080|EGRESS_PORT=11080|; s|^BAPC_CONTROLLER_URL=.*|BAPC_CONTROLLER_URL=http://127.0.0.1:18080|" \
       -e "s|^RELAY_PUBLIC_ENDPOINT=.*|RELAY_PUBLIC_ENDPOINT=127.0.0.1:61900|; s|^EGRESS_FIXED_IP=.*|EGRESS_FIXED_IP=127.0.0.1:11080|" \
       -e "s|^PORTAL_PUBLIC_ORIGIN=.*|PORTAL_PUBLIC_ORIGIN=https://staging-vpn.bapc.app|; s|^WAREHOUSE_URL=.*|WAREHOUSE_URL=|" \
       "$HERE/instance.env.example" > "$ENV_FILE.new"
-  while grep -q "__R__" "$ENV_FILE.new"; do sed -i "0,/__R__/s//$(r)/" "$ENV_FILE.new"; done
+  # Staging's own secrets, one fresh value each (64 hex characters).
+  for k in CONTROL_API_TOKEN_SECRET EVENT_SIGNING_SECRET OOB_SHARED_SECRET DIAGNOSTICS_SHARED_SECRET HEADQUARTERS_SHARED_SECRET CLOUD_DEPLOYMENT_SHARED_SECRET INTEGRATION_SHARED_SECRET; do
+    sed -i "s#^$k=\$#$k=$(r)#" "$ENV_FILE.new"
+  done
+  if grep -qE '^(CONTROL_API_TOKEN_SECRET|EVENT_SIGNING_SECRET|OOB_SHARED_SECRET)=$' "$ENV_FILE.new"; then echo "staging secrets weren't filled" >&2; rm -f "$ENV_FILE.new"; exit 1; fi
   chown root:bapc-vpn "$ENV_FILE.new"; chmod 640 "$ENV_FILE.new"; mv "$ENV_FILE.new" "$ENV_FILE"
   log "wrote $ENV_FILE (own secrets; no gateway, Billing, email, Warehouse or Observability keys)"
 fi

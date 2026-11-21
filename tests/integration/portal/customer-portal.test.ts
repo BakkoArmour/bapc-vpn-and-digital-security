@@ -622,3 +622,22 @@ test("pages keep their accessibility basics: language, skip link, focus outline,
     for(const id of ids)assert.match(account,new RegExp(`<label for="${id}">`),`field ${id} has a label`);
   }finally{server.close();}
 });
+
+test("only the real site is indexable: staging and other copies send noindex and block crawlers",async()=>{
+  const {server,base}=await startPortal({value:false}); // origin http://portal.test, i.e. not vpn.bapc.app
+  try{
+    const home=await fetch(base);
+    assert.equal(home.headers.get("x-robots-tag"),"noindex, nofollow");
+    assert.equal(await (await fetch(`${base}/robots.txt`)).text(),"User-agent: *\nDisallow: /\n");
+  }finally{server.close();}
+  const ctx=setup();
+  const handler=createPortalHandler({origin:"https://vpn.bapc.app",identity:null,billing:null,sessions:ctx.customers,devices:ctx.devices,join:ctx.join,joinScript:()=>"",accountData:new MemoryAccountData(ctx.customers)});
+  const real:Server=createServer((q,s)=>void handler(q,s));
+  await new Promise<void>(r=>real.listen(0,"127.0.0.1",r));
+  try{
+    const b=`http://127.0.0.1:${(real.address() as AddressInfo).port}`;
+    const home=await fetch(b);
+    assert.equal(home.headers.get("x-robots-tag"),null,"the real site is indexable");
+    assert.match(await (await fetch(`${b}/robots.txt`)).text(),/Disallow: \/account[\s\S]*Disallow: \/admin/);
+  }finally{real.close();}
+});

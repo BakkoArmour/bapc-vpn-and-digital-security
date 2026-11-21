@@ -58,6 +58,7 @@ export const verifyBillingHook=(secret:string,header:string,raw:string,nowS=Math
 };
 
 const COOKIE="bapc_vpn_session";
+export const PUBLIC_ORIGIN="https://vpn.bapc.app";
 const SESSION_HOURS=12;
 const CSP="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const LIMITS:Record<string,RateLimitRule>={
@@ -78,12 +79,14 @@ export const createPortalHandler=(deps:PortalDeps)=>{
   const rememberHookEvent=(id:string)=>{seenHookEvents.add(id);if(seenHookEvents.size>5000)seenHookEvents.delete(seenHookEvents.values().next().value!);};
   const secure=deps.origin.startsWith("https:");
   const redirectUri=`${deps.origin}/auth/callback`;
+  // Only the real site is for search engines: staging (staging-vpn.bapc.app) and any other copy say noindex everywhere.
+  const indexable=deps.origin===PUBLIC_ORIGIN;
 
   const send=(res:ServerResponse,status:number,body:string,type="text/html; charset=utf-8",extra:Record<string,string|string[]>={})=>{
     res.writeHead(status,{
       "content-type":type,"cache-control":"no-store","x-content-type-options":"nosniff",
       "referrer-policy":"no-referrer","content-security-policy":CSP,"x-frame-options":"DENY",
-      ...(secure?{"strict-transport-security":"max-age=31536000"}:{}),...extra
+      ...(secure?{"strict-transport-security":"max-age=31536000"}:{}),...(indexable?{}:{"x-robots-tag":"noindex, nofollow"}),...extra
     });
     res.end(body);
   };
@@ -145,7 +148,7 @@ export const createPortalHandler=(deps:PortalDeps)=>{
     };
 
     if(path==="/healthz"){send(res,200,JSON.stringify({status:"ok"}),"application/json");return;}
-    if(path==="/robots.txt"){send(res,200,"User-agent: *\nDisallow: /account\nDisallow: /auth/\n","text/plain");return;}
+    if(path==="/robots.txt"){send(res,200,indexable?"User-agent: *\nDisallow: /account\nDisallow: /auth/\nDisallow: /admin\n":"User-agent: *\nDisallow: /\n","text/plain");return;}
 
     // --- the Windows installer's API ---
     if(path==="/api/v1/devices/join"&&method==="POST"){

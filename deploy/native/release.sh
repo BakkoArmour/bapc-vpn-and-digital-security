@@ -40,7 +40,9 @@ echo "$SHA $(date -u +%Y%m%dT%H%M%SZ)" > "$DEST.tmp/RELEASE"
 chown -R root:root "$DEST.tmp"; chmod -R go-w "$DEST.tmp"
 rm -rf "$DEST" && mv "$DEST.tmp" "$DEST"
 
-PREV=$(readlink -f "$BASE/current" 2>/dev/null || true)
+# Only a release that was really live counts as the rollback point (readlink -f answers even for a missing path).
+PREV=""
+[ -L "$BASE/current" ] && PREV=$(readlink -f "$BASE/current") && [ -d "$PREV" ] || PREV=""
 restart_all(){
   # Every unit is PartOf the target, so restarting it restarts them all; each service Requires and comes After the
   # migrations unit, so a database that fails to migrate leaves the services stopped instead of half-started.
