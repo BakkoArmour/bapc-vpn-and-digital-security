@@ -55,7 +55,7 @@ export async function waitFor(api, dep, { log, origin, timeoutMs, sleep = (ms) =
 }
 
 export async function release({ api, origin, stage, digest, releaseId, settings, log = console.log, timeoutMs = 30 * 60_000, sleep }) {
-  const apps = vpnApps({ digest, stage, release: releaseId, node: settings.node ?? 'bapc-vpn', optional: settings.optional, publicEnv: settings.publicEnv });
+  const apps = vpnApps({ digest, stage, release: releaseId, node: settings.node ?? 'bapc-vpn', optional: settings.optional, publicEnv: settings.publicEnv, db: settings.db });
   const existing = new Map(((await api('GET', `/v1/apps?project_id=${encodeURIComponent(settings.project_id)}`)).apps ?? []).map((a) => [a.slug, a]));
   const ids = new Map();
   for (const a of apps) {

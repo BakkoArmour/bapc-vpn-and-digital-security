@@ -31,8 +31,11 @@ const CORE_SECRETS = ['CONTROL_API_TOKEN_SECRET', 'EVENT_SIGNING_SECRET', 'OOB_S
  *   VPN_GATEWAY_ENDPOINT, OBOP_SYSTEM_ID, WAREHOUSE_URL, WAREHOUSE_SOURCE_ID.
  */
 export function vpnApps(o) {
-  const st = STAGES[o.stage];
-  if (!st) throw new Error(`stage must be production or staging, not ${o.stage}`);
+  const base = STAGES[o.stage];
+  if (!base) throw new Error(`stage must be production or staging, not ${o.stage}`);
+  // o.db: what Cheisgos actually assigned (it picks the cluster's port), from the settings file.
+  const st = { ...base, db: { ...base.db, ...(o.db ?? {}) } };
+  if (!Number.isInteger(st.db.port) || st.db.port < 1024 || st.db.port > 65535) throw new Error('db.port must be the Cheisgos cluster port');
   if (!/^sha256:[a-f0-9]{64}$/.test(o.digest)) throw new Error('digest must be sha256:<64 hex>');
   const opt = { obop: false, portal: false, warehouse: false, agents: false, ...o.optional };
   const pub = o.publicEnv ?? {};

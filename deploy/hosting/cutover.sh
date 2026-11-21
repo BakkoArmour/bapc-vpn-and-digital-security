@@ -21,12 +21,15 @@ set -Eeuo pipefail
 STAGE=${1:?usage: cutover.sh staging|production <digest> <sha>}
 DIGEST=${2:?digest}
 SHA=${3:?sha}
-case "$STAGE" in production) S=prod; PORT_OFF=0; DBPORT=15432; CLUSTER=vpn-core;; staging) S=staging; PORT_OFF=10000; DBPORT=15433; CLUSTER=vpn-staging;; *) echo "stage?" >&2; exit 2;; esac
+case "$STAGE" in production) S=prod; PORT_OFF=0; CLUSTER=vpn-core;; staging) S=staging; PORT_OFF=10000; CLUSTER=vpn-staging;; *) echo "stage?" >&2; exit 2;; esac
 [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "digest must be sha256:<64 hex>" >&2; exit 2; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DB=bapc_vpn; MIGRATOR=bapc_vpn_migrator
 SECRET_FILE=/etc/bapc-sql/secrets/sql__bapc-vpn__${STAGE}__${CLUSTER}__${MIGRATOR}.v1
 SETTINGS=/etc/bapc-vpn/hosting-$STAGE.json
+# Cheisgos picks each cluster's port; the settings file records it ("db": {"port": ...}).
+[ -s "$SETTINGS" ] && DBPORT=$(node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String(s.db?.port??""))' "$SETTINGS")
+[ -n "$DBPORT" ] || { echo "settings need db.port (the Cheisgos cluster port)" >&2; exit 2; }
 log(){ printf '%s cutover %s: %s\n' "$(date -u +%FT%TZ)" "$STAGE" "$*"; }
 STOPPED=0
 die(){ log "STOPPED: $*"; back; exit 1; }
