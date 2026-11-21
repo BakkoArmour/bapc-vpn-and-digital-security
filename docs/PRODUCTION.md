@@ -91,9 +91,18 @@ Every change to `.env` is preceded by a dated copy (`.env.bak-<stamp>`). After c
 R3 (sign-in features live in Sign in with BAPC), R6 (no two-step sign-in), R8 (one-person customer accounts: no customer
 team roles). See `bapc-cloud-and-deploy/deploy/audit/exceptions.md`.
 
+## Staging
+
+https://staging-vpn.bapc.app runs on the same server **without Docker** (systemd + host PostgreSQL 18; see
+[deploy/native/README.md](../deploy/native/README.md)): its own database (`bapc_security_staging`), secrets
+(`/etc/bapc-vpn/staging.env`) and ports (18080/18095/...). It has no VPN gateway and no Billing, sign-in, email, Warehouse or
+Observability keys, and it tells search engines not to index it. Ship to staging first:
+`systemd-run --unit=bapc-vpn-release-staging bash /opt/bapc-vpn-native-setup/native/release.sh staging <bundle> <sha>`
+(same build, checks and automatic rollback as production's).
+
 ## Known open items
 
 - Observability token not issued yet (errors are only in local logs).
-- Runs on Docker; moving to systemd services and BAPC Database/Cheisgos needs a planned window.
-- No staging copy yet.
+
+- Production still runs on Docker; deploy/native/cutover.sh moves it (rehearsed on staging), needs a window.
 - Trust Core signs with a development CA held in Postgres (no KMS/HSM); secrets live in `.env`, not the BAPC vault.
