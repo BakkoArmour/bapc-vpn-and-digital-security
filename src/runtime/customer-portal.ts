@@ -96,7 +96,8 @@ const trialTimer=setInterval(()=>void refreshTrials(),TRIAL_REFRESH_MS);
 const joinScript=readFileSync(JOIN_SCRIPT_PATH,"utf8");
 const handler=createPortalHandler({
   origin:(env.PORTAL_PUBLIC_ORIGIN??"https://vpn.bapc.app").replace(/\/$/,""),
-  identity,billing,sessions:customers,devices,join:deviceJoin,joinScript:()=>joinScript,trials:()=>trials,accountData,mail
+  identity,billing,sessions:customers,devices,join:deviceJoin,joinScript:()=>joinScript,trials:()=>trials,accountData,mail,
+  ...(env.BAPC_BILLING_HOOK_SECRET?{billingHookSecret:env.BAPC_BILLING_HOOK_SECRET}:{})
 });
 
 // Billing is checked whenever a customer opens their account, and here on a
@@ -133,7 +134,7 @@ server.requestTimeout=20_000;server.headersTimeout=10_000;server.keepAliveTimeou
 const port=Number(env.PORTAL_PORT??8095),host=env.PORTAL_BIND_HOST??"127.0.0.1";
 server.listen(port,host,()=>console.log(JSON.stringify({
   event:"ready",service:"bapc-vpn-portal",host,port,signIn:!!identity,billing:!!billing,gateway:!!config.vpnGateway,
-  email:(env.BAPC_NOTIFICATIONS_KEY??"").length>=32
+  email:(env.BAPC_NOTIFICATIONS_KEY??"").length>=32,billingHook:!!env.BAPC_BILLING_HOOK_SECRET
 })));
 
 const shutdown=()=>{clearInterval(timer);clearInterval(trialTimer);server.close(()=>void db.close().then(()=>process.exit(0)));setTimeout(()=>process.exit(1),10_000).unref();};

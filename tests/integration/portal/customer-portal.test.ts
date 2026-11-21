@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {createServer, type Server} from "node:http";
 import type {AddressInfo} from "node:net";
-import {generateKeyPairSync} from "node:crypto";
+import {createHmac, generateKeyPairSync} from "node:crypto";
 import {MemoryInvites, GATEWAY, deviceRequest} from "../devices/join-fakes.js";
 import {DeviceJoinService, type InviteAccount} from "../../../src/application/device-join.js";
 import {CustomerDeviceService, DEVICE_LIMIT, type CustomerDevice, type CustomerSession, type CustomerStore} from "../../../src/application/customer-devices.js";
@@ -12,7 +12,7 @@ import {NoopPeerDistributor} from "../../../src/infrastructure/adapters.js";
 import {WindowsTpmAttestationProvider} from "../../../src/infrastructure/attestation/providers.js";
 import {AccountAttestedVerifier} from "../../../src/infrastructure/attestation/account-attested.js";
 import {BapcBillingClient, type AccessState} from "../../../src/infrastructure/bapc-accounts.js";
-import {createPortalHandler, type PortalSessionStore} from "../../../src/runtime/portal-handler.js";
+import {createPortalHandler, verifyBillingHook, type PortalSessionStore} from "../../../src/runtime/portal-handler.js";
 import {AuthorizationError} from "../../../src/domain/errors.js";
 import type {AccountDataStore, AccountExport} from "../../../src/application/account-data.js";
 import {BapcNotifier} from "../../../src/infrastructure/bapc-notifications.js";
@@ -159,7 +159,7 @@ test("BapcBillingClient never mistakes an outage for an unpaid account",async()=
 
 // --- HTTP layer ---
 
-const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>;status?:string;renews?:string;cancelAtPeriodEnd?:boolean;billingDown?:{value:boolean}}={})=>{
+const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>;status?:string;renews?:string;cancelAtPeriodEnd?:boolean;billingDown?:{value:boolean};hookSecret?:string}={})=>{
   const ctx=setup();
   const accountData=new MemoryAccountData(ctx.customers);
   const sent:{to:string;subject:string;text:string}[]=[];
@@ -179,7 +179,7 @@ const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>
       }
     },
     sessions:ctx.customers,devices:ctx.devices,join:ctx.join,joinScript:()=>"# script",
-    trials:()=>opts.trials??{},accountData,mail
+    trials:()=>opts.trials??{},accountData,mail,...(opts.hookSecret?{billingHookSecret:opts.hookSecret}:{})
   });
   const server:Server=createServer((q,s)=>void handler(q,s));
   await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
@@ -466,4 +466,54 @@ test("customers are emailed: welcome once, each new device, paused and resumed d
     await formPost(base,cookie,"/account/delete",{csrf,confirm:"DELETE"});
     assert.equal(sent.at(-1)!.subject,"Your BAPC VPN account is closed");
   }finally{server.close();}
+});
+
+// --- BAPC Billing plan.changed hook ---
+
+const HOOK_SECRET=`bhk_${"a".repeat(64)}`;
+const signHook=(raw:string,secret=HOOK_SECRET,t=Math.floor(Date.now()/1000))=>`t=${t},v1=${createHmac("sha256",secret).update(`${t}.${raw}`).digest("hex")}`;
+const postHook=(base:string,body:Record<string,unknown>,sig?:string)=>{
+  const raw=JSON.stringify(body);
+  return fetch(`${base}/api/v1/billing/hook`,{method:"POST",headers:{"content-type":"application/json","x-bapc-signature":sig??signHook(raw)},body:raw});
+};
+
+test("verifyBillingHook accepts only Billing's signature, fresh, over the exact body",()=>{
+  const raw='{"a":1}',now=Math.floor(Date.now()/1000);
+  assert.equal(verifyBillingHook(HOOK_SECRET,signHook(raw),raw),true);
+  assert.equal(verifyBillingHook(HOOK_SECRET,signHook(raw,"bhk_other"),raw),false);
+  assert.equal(verifyBillingHook(HOOK_SECRET,signHook(raw),'{"a":2}'),false);
+  assert.equal(verifyBillingHook(HOOK_SECRET,signHook(raw,HOOK_SECRET,now-3600),raw,now),false,"an old (replayed) event is refused");
+  assert.equal(verifyBillingHook(HOOK_SECRET,"garbage",raw),false);
+  assert.equal(verifyBillingHook("",signHook(raw,""),raw),false);
+});
+
+test("a signed plan.changed from Billing pauses and resumes devices at once, emails and audits once per event",async()=>{
+  const {server,base,customers,accountData,sent}=await startPortal({value:true},{hookSecret:HOOK_SECRET});
+  try{
+    const cookie=await signIn(base);
+    const csrf=[...customers.sessionsByHash.values()][0]!.csrfToken;
+    await formPost(base,cookie,"/account/devices",{csrf,kind:"android"});
+    const nodeId=[...customers.rows.keys()][0]!;
+    const lapsed={event_id:"bevt_1",type:"plan.changed",app:"bapc-vpn",account:ACCOUNT.accountId,email:"pat@example.com",paid:false,status:"past_due"};
+    assert.equal((await postHook(base,lapsed,"t=1,v1=00")).status,401,"unsigned or forged events are refused");
+    assert.equal(customers.rows.get(nodeId)!.suspended,false);
+    const r=await postHook(base,lapsed);
+    assert.equal(r.status,200);
+    assert.deepEqual(await r.json(),{ok:true,devices_changed:1});
+    assert.equal(customers.rows.get(nodeId)!.suspended,true,"paused without waiting for the 15-minute sync");
+    assert.equal(sent.at(-1)!.subject,"Your BAPC VPN devices are paused");
+    assert.deepEqual(await (await postHook(base,lapsed)).json(),{duplicate:true});
+    assert.equal(sent.filter(m=>m.subject.includes("paused")).length,1,"a retried event isn't emailed twice");
+    assert.equal(accountData.log.filter(e=>e.action==="billing.plan_changed").length,1);
+    await postHook(base,{...lapsed,event_id:"bevt_2",paid:true,status:"active"});
+    assert.equal(customers.rows.get(nodeId)!.suspended,false);
+    assert.equal(sent.at(-1)!.subject,"Your BAPC VPN devices are back on");
+    assert.deepEqual(await (await postHook(base,{...lapsed,event_id:"bevt_3",app:"some-other-app"})).json(),{ignored:true});
+  }finally{server.close();}
+});
+
+test("without a hook secret the route says it isn't configured",async()=>{
+  const {server,base}=await startPortal({value:true});
+  try{assert.equal((await postHook(base,{event_id:"e",type:"plan.changed",app:"bapc-vpn",account:"a",paid:true})).status,503);}
+  finally{server.close();}
 });

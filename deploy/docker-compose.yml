@@ -114,6 +114,8 @@ services:
       BAPC_BILLING_KEY: ${BAPC_BILLING_KEY:-}
       # BAPC Notifications app key (app id bapc-vpn). Unset = customer emails are skipped, never an error.
       BAPC_NOTIFICATIONS_KEY: ${BAPC_NOTIFICATIONS_KEY:-}
+      # Signing secret Billing gave when the plan.changed hook was registered (register-billing-hook.js).
+      BAPC_BILLING_HOOK_SECRET: ${BAPC_BILLING_HOOK_SECRET:-}
       VPN_GATEWAY_PUBLIC_KEY: ${VPN_GATEWAY_PUBLIC_KEY:-}
       VPN_GATEWAY_ENDPOINT: ${VPN_GATEWAY_ENDPOINT:-}
       VPN_CLIENT_DNS: ${VPN_CLIENT_DNS:-1.1.1.1,1.0.0.1}

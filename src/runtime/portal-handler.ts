@@ -1,5 +1,5 @@
 import type {IncomingMessage, ServerResponse} from "node:http";
-import {timingSafeEqual} from "node:crypto";
+import {createHmac, timingSafeEqual} from "node:crypto";
 import QRCode from "qrcode-svg";
 import {DomainError} from "../domain/errors.js";
 import {asHttpError} from "../api/rest/errors.js";
@@ -41,14 +41,26 @@ export interface PortalDeps {
   accountData:AccountDataStore;
   // Customer email (BAPC Notifications). Optional: without it nothing is sent.
   mail?:{send(to:string,subject:string,text:string):Promise<SendOutcome>};
+  // Signing secret for BAPC Billing's plan.changed hook (POST /api/v1/billing/hook). Unset = the route answers 503
+  // and payment changes are still picked up by page visits and the 15-minute sync.
+  billingHookSecret?:string;
 }
+
+const HOOK_MAX_SKEW_S=300;
+// Billing's x-bapc-signature: "t=<unix seconds>,v1=<hex HMAC-SHA256 of `${t}.${raw body}`>", within 5 minutes.
+export const verifyBillingHook=(secret:string,header:string,raw:string,nowS=Math.floor(Date.now()/1000))=>{
+  const parts=Object.fromEntries(header.split(",").map(p=>{const i=p.indexOf("=");return [p.slice(0,i).trim(),p.slice(i+1).trim()];}));
+  const t=Number(parts.t),v1=String(parts.v1??"");
+  if(!secret||!Number.isInteger(t)||Math.abs(nowS-t)>HOOK_MAX_SKEW_S||!/^[0-9a-f]{64}$/.test(v1))return false;
+  return sameToken(createHmac("sha256",secret).update(`${t}.${raw}`).digest("hex"),v1);
+};
 
 const COOKIE="bapc_vpn_session";
 const SESSION_HOURS=12;
 const CSP="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const LIMITS:Record<string,RateLimitRule>={
   join:{limit:10,windowMs:60_000},auth:{limit:30,windowMs:60_000},
-  addDevice:{limit:10,windowMs:3_600_000},page:{limit:240,windowMs:60_000},
+  addDevice:{limit:10,windowMs:3_600_000},page:{limit:240,windowMs:60_000},hook:{limit:120,windowMs:60_000},
   export:{limit:10,windowMs:3_600_000},closeAccount:{limit:5,windowMs:3_600_000}
 };
 export const DELETE_CONFIRMATION="DELETE";
@@ -58,6 +70,10 @@ const sameToken=(a:string,b:string)=>{const x=Buffer.from(a),y=Buffer.from(b);re
 
 export const createPortalHandler=(deps:PortalDeps)=>{
   const limiter=new MemoryRateLimiter();
+  // Billing retries until it gets a 2xx, so the same event can arrive twice; acting twice is harmless
+  // (pausing is idempotent) but it shouldn't be audited or emailed twice.
+  const seenHookEvents=new Set<string>();
+  const rememberHookEvent=(id:string)=>{seenHookEvents.add(id);if(seenHookEvents.size>5000)seenHookEvents.delete(seenHookEvents.values().next().value!);};
   const secure=deps.origin.startsWith("https:");
   const redirectUri=`${deps.origin}/auth/callback`;
 
@@ -140,6 +156,28 @@ export const createPortalHandler=(deps:PortalDeps)=>{
       return;
     }
     if(path==="/install/join-vpn.ps1"&&method==="GET"){send(res,200,deps.joinScript(),"text/plain; charset=utf-8");return;}
+
+    // --- BAPC Billing tells us a plan changed (signed, retried by Billing until we answer 2xx) ---
+    if(path==="/api/v1/billing/hook"&&method==="POST"){
+      limit("hook");
+      if(!deps.billingHookSecret)throw Object.assign(new Error("billing hook not configured"),{status:503});
+      const raw=await readBody(req,32_000);
+      if(!verifyBillingHook(deps.billingHookSecret,String(req.headers["x-bapc-signature"]??""),raw))throw Object.assign(new Error("bad signature"),{status:401});
+      let ev:{event_id?:unknown;type?:unknown;app?:unknown;account?:unknown;email?:unknown;paid?:unknown;status?:unknown};
+      try{ev=JSON.parse(raw);}catch{throw Object.assign(new Error("invalid JSON"),{status:400});}
+      const eventId=String(ev.event_id??"");
+      if(ev.type!=="plan.changed"||ev.app!=="bapc-vpn"||typeof ev.paid!=="boolean"||!eventId){send(res,200,JSON.stringify({ignored:true}),"application/json");return;}
+      if(seenHookEvents.has(eventId)){send(res,200,JSON.stringify({duplicate:true}),"application/json");return;}
+      const account=typeof ev.account==="string"&&ev.account?ev.account:null;
+      if(!account){send(res,200,JSON.stringify({ignored:"no account"}),"application/json");return;}
+      const changed=await deps.devices.applyPaymentState(account,ev.paid);
+      rememberHookEvent(eventId);
+      await audit(account,"billing.plan_changed",{event_id:eventId,paid:ev.paid,status:String(ev.status??""),devices_changed:changed},null,"system");
+      if(changed&&typeof ev.email==="string"&&ev.email.includes("@"))
+        await email(ev.email.toLowerCase(),account,ev.paid?"devices_resumed":"devices_paused",ev.paid?customerEmails.devicesResumed(changed):customerEmails.devicesPaused(changed));
+      send(res,200,JSON.stringify({ok:true,devices_changed:changed}),"application/json");
+      return;
+    }
 
     limit("page");
     const s=await currentSession(req);
