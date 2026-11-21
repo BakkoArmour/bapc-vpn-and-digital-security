@@ -50,6 +50,9 @@ pg_isready -q -h 127.0.0.1 -p "$DBPORT" || die "no Cheisgos PostgreSQL on 127.0.
 [ -s /etc/bapc-vpn/host-client.env ] || die "no /etc/bapc-vpn/host-client.env (HOST_CLIENT_ID/HOST_CLIENT_SECRET)"
 TARGET="host=127.0.0.1 port=$DBPORT dbname=$DB user=$MIGRATOR sslmode=require"
 export PGPASSWORD; PGPASSWORD=$(cat "$SECRET_FILE")
+# The migrator role is NOINHERIT: it sees and creates objects only while acting as the owner, so every command
+# against Cheisgos runs as the owner (otherwise the tables are invisible and the "empty" check below is meaningless).
+export PGOPTIONS="-c role=${DB}_owner"
 TABLES=$(psql "$TARGET" -qtAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'") || die "cannot sign in to Cheisgos as $MIGRATOR"
 [ "$TABLES" = 0 ] || die "the Cheisgos database $DB already has $TABLES tables: refusing to copy over it"
 
@@ -72,17 +75,17 @@ else
   systemctl stop bapc-vpn@staging.target
   STOPPED=1
   OLD_URL=$(grep -E '^DATABASE_URL=' /etc/bapc-vpn/staging.env | cut -d= -f2-)
-  ( unset PGPASSWORD; pg_dump --dbname="$OLD_URL" --format=custom --no-owner --no-privileges ) > "$WORK/db.dump"
-  OLD_COUNTS=$( unset PGPASSWORD; psql "$OLD_URL" -qtAc "$COUNTS" )
+  ( unset PGPASSWORD PGOPTIONS; pg_dump --dbname="$OLD_URL" --format=custom --no-owner --no-privileges ) > "$WORK/db.dump"
+  OLD_COUNTS=$( unset PGPASSWORD PGOPTIONS; psql "$OLD_URL" -qtAc "$COUNTS" )
 fi
 [ -s "$WORK/db.dump" ] || die "the dump is empty"
 
 log "3/5 copying the data into Cheisgos ($DB on 127.0.0.1:$DBPORT) as the database owner"
-PGOPTIONS="-c role=${DB}_owner" pg_restore --dbname="$TARGET" --no-owner --no-privileges --role="${DB}_owner" --exit-on-error < "$WORK/db.dump" || die "restore into Cheisgos failed"
+pg_restore --dbname="$TARGET" --no-owner --no-privileges --role="${DB}_owner" --exit-on-error < "$WORK/db.dump" || die "restore into Cheisgos failed"
 NEW_COUNTS=$(psql "$TARGET" -qtAc "$COUNTS")
 [ "$OLD_COUNTS" = "$NEW_COUNTS" ] || die "Cheisgos has '$NEW_COUNTS' tables/migrations, the old database '$OLD_COUNTS'"
 log "copied: $NEW_COUNTS (tables, migrations)"
-unset PGPASSWORD
+unset PGPASSWORD PGOPTIONS
 
 log "4/5 releasing $SHA on App Hosting"
 set -a; . /etc/bapc-vpn/host-client.env; set +a
@@ -99,6 +102,7 @@ if [ "$STAGE" = production ]; then
   umask 077
   { echo "DATABASE_URL=postgresql://$MIGRATOR:$(cat "$SECRET_FILE")@127.0.0.1:$DBPORT/$DB?sslmode=require"
     echo "DB_NAME=$DB"
+    echo "PGOPTIONS=-c role=${DB}_owner"
     [ -s /etc/bapc-vpn-backup/check-url ] && echo "CHECK_DATABASE_URL=$(cat /etc/bapc-vpn-backup/check-url)"; } > /etc/bapc-vpn-backup/env.new
   mv /etc/bapc-vpn-backup/env.new /etc/bapc-vpn-backup/env
   systemctl start bapc-vpn-backup.service && log "backup from Cheisgos verified" || log "WARNING: the first backup from Cheisgos failed; check journalctl -u bapc-vpn-backup"

@@ -63,7 +63,7 @@ export function vpnApps(o) {
       // Migrations run as Cheisgos' migrator role acting as the database owner (PGOPTIONS role=...), so new tables
       // belong to the owner and the runtime role gets them through default privileges; the server then runs as runtime.
       runtime: { type: 'http', port: PORTS.api, replicas: 1, command: ['sh', '-c',
-        `PGUSER=${st.db.migrator} PGPASSWORD="$PG_MIGRATOR_PASSWORD" PGOPTIONS="-c role=${st.db.name}_owner" node dist/src/runtime/migrate-cli.js db up && unset PG_MIGRATOR_PASSWORD && exec node dist/src/runtime/production-server.js`] },
+        `PGUSER=${st.db.migrator} PGPASSWORD="$PG_MIGRATOR_PASSWORD" PG_RUNTIME_ROLE=${st.db.user} PGOPTIONS="-c role=${st.db.name}_owner" node dist/src/runtime/migrate-cli.js db up && unset PG_MIGRATOR_PASSWORD && exec node dist/src/runtime/production-server.js`] },
       resources: res('1', '384Mi'), health: { readiness: '/healthz', liveness: '/healthz', startupSeconds: 120 }, network: net('api'),
       env: { ...baseEnv, ...gateway, BIND_HOST: '0.0.0.0', PORT: String(PORTS.api), OOB_CONTROLLER_URL: `http://vpn-oob:${PORTS.oob}` }, secrets: [...baseSecrets, sec('PG_MIGRATOR_PASSWORD', st.db.migratorSecret)],
     }),

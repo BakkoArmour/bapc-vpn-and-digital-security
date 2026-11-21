@@ -58,7 +58,8 @@ pgplain(){ # same, for tools that take no --dbname (pg_restore --list)
 sql(){ pgtool psql "$1" -v ON_ERROR_STOP=1 -qtAc "$2"; }
 # The throwaway restore check: on CHECK_DATABASE_URL's server when set, else on the live one.
 checktool(){
-  if [ -n "${CHECK_DATABASE_URL:-}" ]; then local tool=$1 db=$2; shift 2; "$tool" --dbname="${CHECK_DATABASE_URL%/*}/$db" "$@"; else pgtool "$@"; fi
+  # PGOPTIONS (e.g. "-c role=<owner>" for a Cheisgos migrator) belongs to the live server only.
+  if [ -n "${CHECK_DATABASE_URL:-}" ]; then local tool=$1 db=$2; shift 2; env -u PGOPTIONS "$tool" --dbname="${CHECK_DATABASE_URL%/*}/$db" "$@"; else pgtool "$@"; fi
 }
 checksql(){ checktool psql "$1" -v ON_ERROR_STOP=1 -qtAc "$2"; }
 COUNTS="SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('bapc_security_core','public') AND table_type='BASE TABLE')||' '||(SELECT count(*) FROM public.schema_migrations)"
