@@ -2,7 +2,12 @@ import {createHash} from "node:crypto";
 import {readFileSync, readdirSync} from "node:fs";
 import {join} from "node:path";
 
-export interface MigrationFile {name:string; sql:string; checksum:string;}
+// checksum is taken over the file with LF line endings, so a checkout's
+// line-ending style (core.autocrlf on Windows vs Linux CI) can't make an
+// unchanged migration look edited. acceptedChecksums also carries the CRLF
+// variant: databases migrated before this normalisation (the live server was
+// deployed from a CRLF Windows checkout) stored that one.
+export interface MigrationFile {name:string; sql:string; checksum:string; acceptedChecksums?:string[];}
 export interface MigrationResult {applied:string[]; skipped:string[];}
 export interface PgRow {[column:string]:any;}
 export interface PgQueryable {
@@ -12,16 +17,21 @@ export interface PgLike extends PgQueryable {
   transaction<T>(work:(client:PgQueryable)=>Promise<T>):Promise<T>;
 }
 
+const sha256=(s:string)=>createHash("sha256").update(s).digest("hex");
+export const migrationFile=(name:string,raw:string):MigrationFile=>{
+  const lf=raw.replace(/\r\n/g,"\n");
+  const checksum=sha256(lf);
+  return {name,sql:raw,checksum,acceptedChecksums:[checksum,sha256(lf.replace(/\n/g,"\r\n"))]};
+};
+const matches=(m:MigrationFile,stored:string)=>stored===m.checksum||(m.acceptedChecksums??[]).includes(stored);
+
 const LOCK_KEY = 0x4241_5043_5645; // arbitrary constant advisory-lock key ("BAPCVE")
 
 export const loadMigrations = (dir:string):MigrationFile[] =>
   readdirSync(dir)
     .filter(f=>f.endsWith(".sql"))
     .sort()
-    .map(name=>{
-      const sql=readFileSync(join(dir,name),"utf8");
-      return {name,sql,checksum:createHash("sha256").update(sql).digest("hex")};
-    });
+    .map(name=>migrationFile(name,readFileSync(join(dir,name),"utf8")));
 
 export class MigrationRunner {
   constructor(private db:PgLike){}
@@ -46,7 +56,7 @@ export class MigrationRunner {
       for(const m of migrations){
         const priorChecksum=byName.get(m.name);
         if(priorChecksum){
-          if(priorChecksum!==m.checksum){
+          if(!matches(m,priorChecksum)){
             throw new Error(`migration ${m.name} has changed since it was applied (checksum mismatch)`);
           }
           skipped.push(m.name);
@@ -72,7 +82,7 @@ export class MigrationRunner {
     return migrations.map(m=>{
       const row=byName.get(m.name);
       if(!row)return {name:m.name,applied:false as const};
-      return {name:m.name,applied:true as const,appliedAt:row.applied_at,drifted:row.checksum!==m.checksum};
+      return {name:m.name,applied:true as const,appliedAt:row.applied_at,drifted:!matches(m,row.checksum)};
     });
   }
 }

@@ -41,6 +41,11 @@ test("live: nodesOverdueForRotation actually executes against real Postgres",{sk
   const {PgRepositories}=await import("../../../src/infrastructure/postgres/repositories.js");
   const db=new Postgres(liveDatabaseUrl!);
   const deviceId=randomUUID(),nodeId=randomUUID();
+  // Test files run in parallel, so don't rely on the migrate test having
+  // created the schema first: apply it here (idempotent, advisory-locked).
+  const {MigrationRunner,loadMigrations}=await import("../../../src/infrastructure/postgres/migrate.js");
+  const {fileURLToPath}=await import("node:url");
+  await new MigrationRunner(db).apply(loadMigrations(fileURLToPath(new URL("../../../../db",import.meta.url))));
   try{
     const repo=new PgRepositories(db);
     const now=new Date();

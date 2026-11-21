@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
-import {MigrationRunner, type MigrationFile, type PgLike, type PgQueryable} from "../../../src/infrastructure/postgres/migrate.js";
+import {MigrationRunner, migrationFile, type MigrationFile, type PgLike, type PgQueryable} from "../../../src/infrastructure/postgres/migrate.js";
 
 // A minimal in-memory PgLike fake so the runner's ordering/checksum/lock
 // bookkeeping is verified without a live Postgres server.
@@ -126,4 +126,26 @@ test("live: retention/partition functions resolve their tables regardless of the
   }finally{
     await db.close();
   }
+});
+
+// The live server's migrations were applied from a Windows checkout with
+// CRLF endings; this desktop and CI check them out with LF. Before the
+// checksum was normalised, every migration read as "changed" and a deploy
+// from an LF checkout refused to run at all.
+test("line endings never make an unchanged migration look edited",async()=>{
+  const lf="CREATE TABLE a(id int);\nCREATE TABLE b(id int);\n";
+  const crlf=lf.replace(/\n/g,"\r\n");
+  assert.equal(migrationFile("001_a.sql",lf).checksum,migrationFile("001_a.sql",crlf).checksum);
+  for(const [appliedWith,deployedWith] of [[crlf,lf],[lf,crlf]] as const){
+    const db=new FakePg();
+    const runner=new MigrationRunner(db);
+    db.tables.set("001_a.sql",{name:"001_a.sql",checksum:createHash("sha256").update(appliedWith).digest("hex")});
+    const result=await runner.apply([migrationFile("001_a.sql",deployedWith)]);
+    assert.deepEqual(result.skipped,["001_a.sql"]);
+    const [status]=await runner.status([migrationFile("001_a.sql",deployedWith)]);
+    assert.equal(status && "drifted" in status ? status.drifted : undefined,false);
+  }
+  const db=new FakePg();
+  db.tables.set("001_a.sql",{name:"001_a.sql",checksum:createHash("sha256").update(crlf).digest("hex")});
+  await assert.rejects(new MigrationRunner(db).apply([migrationFile("001_a.sql",lf+"-- edited\n")]),/checksum mismatch/);
 });
