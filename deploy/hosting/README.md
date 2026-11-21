@@ -41,7 +41,11 @@ Files: [apps.mjs](apps.mjs) (the nine specs), [release.mjs](release.mjs) (ships 
 7. `/etc/bapc-vpn/hosting-<stage>.json`: `{"project_id": "prj_…", "node": "bapc-vpn", "optional": {…}, "publicEnv":
    {"VPN_GATEWAY_PUBLIC_KEY": "…", "VPN_GATEWAY_ENDPOINT": "116.203.78.222:51820", "OBOP_SYSTEM_ID": "…",
    "WAREHOUSE_URL": "…", "WAREHOUSE_SOURCE_ID": "…"}}` (production; staging has no gateway or Warehouse).
-8. `/etc/bapc-vpn-backup/check-url`: a local PostgreSQL role with CREATEDB for the nightly test restore.
+8. `/etc/bapc-vpn-backup/check-url`: the nightly test restore needs a server **of the same PostgreSQL version** as Cheisgos
+   (18.7 adds column options 18.6 refuses): a throwaway container `bapc-backup-check` from the Cheisgos image digest on
+   127.0.0.1:54390 (`postgres` with a random password in `/etc/bapc-vpn-backup/check-pw`), restart always.
+9. App Hosting must be able to read the image in the Registry (Registry console → Namespaces → bapc-vpn → let tenant
+   `bapc-host` pull); production refuses a digest App Hosting cannot confirm.
 
 ## Moving a stage over
 

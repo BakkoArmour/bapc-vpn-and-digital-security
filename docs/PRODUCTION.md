@@ -9,12 +9,17 @@ the operator API; where the two differ, this file is the live truth.
 | Piece | Where |
 |---|---|
 | Server | `bapc-vpn`, Hetzner, 116.203.78.222 (IPv6 2a01:4f8:1c1a:1f97::1), Ubuntu 26.04. Code in `/opt/bapc-vpn`, settings and secrets in `/opt/bapc-vpn/deploy/.env` (root only). |
-| Services | Docker Compose in `/opt/bapc-vpn/deploy` (`docker-compose.yml` + server-only `docker-compose.override.yml`, which binds every port to 127.0.0.1). Postgres 17 runs in the same stack (volume `security-db`). |
+| Services | **BAPC App Hosting** (since 21 Nov 2026 23:12 UTC, release a770ba4): nine apps in project `bapc-vpn` (stage production), rootless Podman under the `bapc-host` user, on the same 127.0.0.1 ports as before (8080, 8095, 50051, 8181, 8090, 5353/udp, 51900/udp, 1080). Image `registry.bapc.app/bapc-vpn/core` (signed). Secrets: BAPC Secrets environment `bapc-vpn-prod`. The old Docker stack in `/opt/bapc-vpn/deploy` is stopped, kept and set not to restart (going back: [deploy/hosting/README.md](../deploy/hosting/README.md)); remove it only after a quiet week, with the owner's yes. |
+| Database | **BAPC Cheisgos** cluster `vpn-core` (standard: primary 127.0.0.1:54321 + streaming standby 54322 on the private `bapc-sql` network; PostgreSQL 18.7, TLS, encrypted storage), database `bapc_vpn`, roles `bapc_vpn_migrator` (migrations, as `bapc_vpn_owner`) and `bapc_vpn_rw` (services). pgBackRest WAL archiving; nightly encrypted off-server copy to BAPC Backup (`bapc-sql-offsite@c07de2bbbcb949afb200.timer`, 03:40 UTC). |
 | VPN gateway | WireGuard `wg0` on the host, UDP 51820 (the only public port besides SSH). `bapc-gateway-sync` pulls the allowed device list every 10 s; `bapc-gateway-firewall` keeps devices off the host and each other. See [DEVICE-JOIN.md](DEVICE-JOIN.md). |
 | Public addresses | Cloudflare tunnel `bapc-vpn-and-digital-security` (917ce328…): `vpn.bapc.app` → customer portal (127.0.0.1:8095), `vpn.bapc-headquarters.com` → control API (127.0.0.1:8080). DNS: `vpn` CNAME in bapc.app and bapc-headquarters.com, proxied. |
 | Code | Code Adytum `bapc/bapc-vpn-and-digital-security` (main copy) and GitHub (backup). |
 
-## Shipping a release (one step, with automatic rollback)
+## Shipping a release
+
+Now: [deploy/hosting/README.md](../deploy/hosting/README.md) ("Every release after that"): build-image.sh (Podman build, sign, push, promote), then release.mjs; production waits for the Registry promotion and "Approve all" in App Hosting. The Docker steps below are kept for going back only.
+
+## Shipping a release on Docker (fallback only)
 
 From a clean checkout of the commit to ship (Windows Git Bash or any shell with ssh):
 
@@ -56,7 +61,7 @@ Every change to `.env` is preceded by a dated copy (`.env.bak-<stamp>`). After c
 
 ## Backups (nightly, tested, off-server)
 
-- `bapc-vpn-backup.timer`, 03:15 UTC ([deploy/backup/](../deploy/backup/bapc-vpn-backup.sh)): `pg_dump` → archive check → **full
+- `bapc-vpn-backup.timer`, 03:15 UTC, now dumping from Cheisgos (`/etc/bapc-vpn-backup/env`: migrator acting as owner; test restore on the throwaway check server `bapc-backup-check`, the same PostgreSQL image, 127.0.0.1:54390) ([deploy/backup/](../deploy/backup/bapc-vpn-backup.sh)): `pg_dump` → archive check → **full
   test restore into a throwaway database with table and migration counts compared** → AES-256 → decrypt check →
   `/var/backups/bapc-vpn/<stamp>/` (14 days kept) → sent to BAPC Backup (`/ingest/bapc-vpn`), which reads it back and alerts
   through Status if a copy is missing or more than 26 h old.
@@ -105,7 +110,7 @@ The earlier systemd copy (`deploy/native/`) is kept, disabled, as a fallback.
 ## Known open items
 
 - Observability token not issued yet (errors are only in local logs).
-- Production still runs on Docker. Staging already runs on App Hosting + Cheisgos; production follows the same
-  [deploy/hosting](../deploy/hosting/README.md) steps (its own Cheisgos cluster, Secrets environment, settings file) in a
-  maintenance window with the owner's yes.
+- Production's apps point at the Cheisgos primary's port (54321); after a Cheisgos failover the settings file needs the new
+  primary port (follow-up: a stable database address).
+- Docker stack kept stopped as the fallback until a quiet week has passed (removal needs the owner's yes).
 - Trust Core signs with a development CA held in Postgres (no KMS/HSM); secrets live in `.env`, not the BAPC vault.
