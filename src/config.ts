@@ -36,9 +36,13 @@ const fraction=(v:string|undefined,d:number)=>{
   if(!Number.isFinite(n)||n<0||n>1)throw new Error("invalid fractional configuration (must be between 0 and 1)");
   return n;
 };
+// deploy/docker-compose.yml's fallbacks ("development-…-change-me") are long
+// enough to pass a length check on their own, so production also refuses
+// anything that is still a placeholder.
+const isPlaceholderSecret=(v:string)=>/change-?me|^development-/i.test(v);
 const ecosystemSecret=(v:string|undefined,name:string,production:boolean)=>{
-  if(production&&(!v||v.length<32))
-    throw new Error(`production ${name} shared secret must be set and at least 32 characters`);
+  if(production&&(!v||v.length<32||isPlaceholderSecret(v)))
+    throw new Error(`production ${name} shared secret must be set, at least 32 characters, and not a placeholder`);
   return v||`development-${name}-secret-change-me`;
 };
 const WG_KEY_RE=/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/;
@@ -62,6 +66,8 @@ export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
   const oobSecret=env.OOB_SHARED_SECRET??"";
   if(environment==="production"&&(secret.length<32||eventSecret.length<32||oobSecret.length<32))
     throw new Error("production control/event signing/OOB shared secrets must be at least 32 characters");
+  if(environment==="production"&&[secret,eventSecret,oobSecret].some(isPlaceholderSecret))
+    throw new Error("production control/event signing/OOB shared secrets must not be placeholder values");
   const production=environment==="production";
   const attestationProviderEnv=env.ATTESTATION_PROVIDER;
   if(attestationProviderEnv!==undefined&&!(ATTESTATION_PROVIDERS as readonly string[]).includes(attestationProviderEnv))

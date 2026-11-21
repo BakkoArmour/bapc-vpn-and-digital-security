@@ -72,3 +72,18 @@ test("defaults attestationProvider to development outside production",()=>{
   assert.equal(loadConfig({}).attestationProvider,"development");
   assert.equal(loadConfig({NODE_ENV:"test"}).attestationProvider,"development");
 });
+
+// deploy/docker-compose.yml falls back to "development-<name>-secret-change-me"
+// for the ecosystem secrets. Those are 38+ characters, so a length check alone
+// let a production deployment start with a publicly known HMAC secret.
+test("production refuses placeholder secrets even when they are long enough",()=>{
+  const real={
+    NODE_ENV:"production",ATTESTATION_PROVIDER:"windows-tpm",
+    CONTROL_API_TOKEN_SECRET:"a".repeat(40),EVENT_SIGNING_SECRET:"b".repeat(40),OOB_SHARED_SECRET:"c".repeat(40),
+    DIAGNOSTICS_SHARED_SECRET:"d".repeat(40),HEADQUARTERS_SHARED_SECRET:"e".repeat(40),
+    CLOUD_DEPLOYMENT_SHARED_SECRET:"f".repeat(40),INTEGRATION_SHARED_SECRET:"g".repeat(40)
+  };
+  assert.doesNotThrow(()=>loadConfig(real));
+  assert.throws(()=>loadConfig({...real,DIAGNOSTICS_SHARED_SECRET:"development-diagnostics-secret-change-me"}),/placeholder/);
+  assert.throws(()=>loadConfig({...real,OOB_SHARED_SECRET:"please-change-me-before-going-live-0000"}),/placeholder/);
+});
