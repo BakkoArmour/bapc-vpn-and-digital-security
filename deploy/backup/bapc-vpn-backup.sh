@@ -19,6 +19,8 @@
 # Database access: by default through the Docker Compose stack in
 # COMPOSE_DIR (the current deployment). Set DATABASE_URL instead to use host
 # pg_dump/pg_restore/psql once the stack runs without Docker.
+# CHECK_DATABASE_URL (optional): a server and role with CREATEDB for the throwaway test restore, when the role in
+# DATABASE_URL may not create databases (BAPC Cheisgos roles cannot); e.g. the machine's local PostgreSQL.
 #
 # Restore a copy:  BACKUP_ENCRYPTION_KEY=... scripts/db-restore.sh <folder>/db.dump.enc
 set -euo pipefail
@@ -54,13 +56,18 @@ pgplain(){ # same, for tools that take no --dbname (pg_restore --list)
   if [ -n "${DATABASE_URL:-}" ]; then "$@"; else (cd "$COMPOSE_DIR" && docker compose exec -T postgres "$@"); fi
 }
 sql(){ pgtool psql "$1" -v ON_ERROR_STOP=1 -qtAc "$2"; }
+# The throwaway restore check: on CHECK_DATABASE_URL's server when set, else on the live one.
+checktool(){
+  if [ -n "${CHECK_DATABASE_URL:-}" ]; then local tool=$1 db=$2; shift 2; "$tool" --dbname="${CHECK_DATABASE_URL%/*}/$db" "$@"; else pgtool "$@"; fi
+}
+checksql(){ checktool psql "$1" -v ON_ERROR_STOP=1 -qtAc "$2"; }
 COUNTS="SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('bapc_security_core','public') AND table_type='BASE TABLE')||' '||(SELECT count(*) FROM public.schema_migrations)"
 
 umask 077
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 WORK="$DIR/.work-$STAMP"
 mkdir -p "$WORK"
-cleanup(){ rm -rf "$WORK"; sql postgres "DROP DATABASE IF EXISTS $CHECK_DB" >/dev/null 2>&1 || true; }
+cleanup(){ rm -rf "$WORK"; checksql postgres "DROP DATABASE IF EXISTS $CHECK_DB" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 log "dumping $DB"
@@ -73,12 +80,12 @@ ENTRIES=$(pgplain pg_restore --list < "$WORK/db.dump" | grep -vc '^;' || true)
 [ "${ENTRIES:-0}" -gt 0 ] || die "pg_restore could not read the archive"
 
 log "test restore into $CHECK_DB"
-sql postgres "DROP DATABASE IF EXISTS $CHECK_DB"
-sql postgres "CREATE DATABASE $CHECK_DB"
-pgtool pg_restore "$CHECK_DB" --no-owner --no-privileges --exit-on-error < "$WORK/db.dump" \
+checksql postgres "DROP DATABASE IF EXISTS $CHECK_DB"
+checksql postgres "CREATE DATABASE $CHECK_DB"
+checktool pg_restore "$CHECK_DB" --no-owner --no-privileges --exit-on-error < "$WORK/db.dump" \
   || die "test restore failed"
-RESTORED_COUNTS=$(sql "$CHECK_DB" "$COUNTS")
-sql postgres "DROP DATABASE $CHECK_DB"
+RESTORED_COUNTS=$(checksql "$CHECK_DB" "$COUNTS")
+checksql postgres "DROP DATABASE $CHECK_DB"
 # Live counts are read just after the dump, so a migration landing in
 # between could differ; nothing migrates at 03:15, so treat any gap as a failure.
 [ "$LIVE_COUNTS" = "$RESTORED_COUNTS" ] || die "restored copy has '$RESTORED_COUNTS' tables/migrations, live has '$LIVE_COUNTS'"

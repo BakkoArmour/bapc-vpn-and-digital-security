@@ -3,9 +3,10 @@ const {Pool}=pg;
 
 export class Postgres {
   readonly pool:pg.Pool;
+  /** An empty connection string means: use the PG* environment variables (PGHOST, PGPASSWORD, PGSSLMODE, ...). */
   constructor(connectionString:string){
     this.pool=new Pool({
-      connectionString,
+      connectionString:connectionString||undefined,
       max:20,
       idleTimeoutMillis:30_000,
       connectionTimeoutMillis:5_000,

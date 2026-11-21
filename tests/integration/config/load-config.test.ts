@@ -87,3 +87,11 @@ test("production refuses placeholder secrets even when they are long enough",()=
   assert.throws(()=>loadConfig({...real,DIAGNOSTICS_SHARED_SECRET:"development-diagnostics-secret-change-me"}),/placeholder/);
   assert.throws(()=>loadConfig({...real,OOB_SHARED_SECRET:"please-change-me-before-going-live-0000"}),/placeholder/);
 });
+
+// Under BAPC App Hosting the database comes from Cheisgos as the standard PG* variables (the password from BAPC
+// Secrets as PGPASSWORD), so no URL with a password is ever assembled; DATABASE_URL still wins when set.
+test("uses the PG* variables when PGHOST is set and DATABASE_URL is not",()=>{
+  assert.equal(loadConfig({PGHOST:"host.containers.internal"}).databaseUrl,"");
+  assert.equal(loadConfig({PGHOST:"h",DATABASE_URL:"postgres://u@h/db"}).databaseUrl,"postgres://u@h/db");
+  assert.equal(loadConfig({}).databaseUrl,"postgres://localhost/bapc_security_core");
+});

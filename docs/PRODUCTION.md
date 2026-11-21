@@ -103,5 +103,8 @@ Observability keys, and it tells search engines not to index it. Ship to staging
 ## Known open items
 
 - Observability token not issued yet (errors are only in local logs).
-- Production still runs on Docker; deploy/native/cutover.sh moves it (rehearsed on staging), needs a window.
+- Production still runs on Docker. The move to BAPC infrastructure (App Hosting + Cheisgos + Secrets + Registry) is
+  built and tested in code ([deploy/hosting/README.md](../deploy/hosting/README.md)); it needs the one-time setup there
+  (owner's yes on each marked step), staging first, then a production window. `deploy/native/` (plain systemd) runs
+  staging today and stays as the fallback.
 - Trust Core signs with a development CA held in Postgres (no KMS/HSM); secrets live in `.env`, not the BAPC vault.
