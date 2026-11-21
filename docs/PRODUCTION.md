@@ -103,6 +103,5 @@ Observability keys, and it tells search engines not to index it. Ship to staging
 ## Known open items
 
 - Observability token not issued yet (errors are only in local logs).
-
 - Production still runs on Docker; deploy/native/cutover.sh moves it (rehearsed on staging), needs a window.
 - Trust Core signs with a development CA held in Postgres (no KMS/HSM); secrets live in `.env`, not the BAPC vault.
