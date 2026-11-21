@@ -59,3 +59,32 @@ test("live: audit, export and erasure of a portal account against real Postgres"
     await db.close();
   }
 });
+
+test("live: staff admin store lists, searches and opens accounts; sessions keep their bapc.app role; staff actions audit",{skip:!liveDatabaseUrl},async()=>{
+  const {PgAdminStore}=await import("../../../src/infrastructure/pg-account-data.js");
+  const db=new Postgres(liveDatabaseUrl!);
+  await new MigrationRunner(db).apply(loadMigrations(fileURLToPath(new URL("../../../../db",import.meta.url))));
+  const acct=`acct-${randomUUID()}`,tok=createHash("sha256").update(acct).digest("hex"),staffTok=createHash("sha256").update(`s-${acct}`).digest("hex");
+  try{
+    const customers=new PgCustomerStore(db),data=new PgAccountData(db),admin=new PgAdminStore(db);
+    await customers.createSession(tok,{accountId:acct,email:`${acct}@example.com`,name:"Pat",csrfToken:"c"},new Date(Date.now()+3600_000));
+    await customers.createSession(staffTok,{accountId:`staff-${acct}`,email:"boss@bapc.app",name:"Boss",csrfToken:"c",role:"admin"},new Date(Date.now()+3600_000));
+    assert.equal((await customers.session(tok))!.role,"user");
+    assert.equal((await customers.session(staffTok))!.role,"admin");
+    await data.audit(acct,"customer","auth.signed_in",{},"203.0.113.7");
+    await data.audit(acct,"staff","staff.payment_rechecked",{staff:"boss@bapc.app"},"198.51.100.2");
+    const found=await admin.listAccounts({search:acct.slice(0,20).toUpperCase(),page:1,pageSize:50});
+    assert.ok(found.rows.some(r=>r.accountId===acct&&r.email===`${acct}@example.com`&&r.lastSignIn instanceof Date),"case-insensitive email search");
+    assert.ok((await admin.listAccounts({search:acct,page:1,pageSize:50})).total>=1,"exact account id search");
+    assert.equal((await admin.listAccounts({search:"no-such-person-xyz",page:1,pageSize:50})).total,0);
+    const detail=await admin.accountDetail(acct);
+    assert.equal(detail!.email,`${acct}@example.com`);
+    assert.deepEqual(detail!.activity.map(a=>`${a.actor}:${a.action}`),["staff:staff.payment_rechecked","customer:auth.signed_in"]);
+    assert.equal(await admin.accountDetail("never-seen"),null);
+    await assert.rejects(db.query(`INSERT INTO bapc_security_core.portal_audit(account_id,actor,action) VALUES($1,'robot','x')`,[acct]),/portal_audit_actor_check/,"only customer, system or staff");
+  }finally{
+    await db.query(`DELETE FROM bapc_security_core.portal_audit WHERE account_id=$1`,[acct]);
+    await db.query(`DELETE FROM bapc_security_core.portal_sessions WHERE token_hash IN ($1,$2)`,[tok,staffTok]);
+    await db.close();
+  }
+});

@@ -14,7 +14,7 @@ import {buildAttestationVerifier} from "../infrastructure/attestation/attestatio
 import {AccountAttestedVerifier} from "../infrastructure/attestation/account-attested.js";
 import {PgEnrollmentInviteStore} from "../infrastructure/pg-enrollment-invites.js";
 import {PgCustomerStore} from "../infrastructure/pg-customer-store.js";
-import {PgAccountData} from "../infrastructure/pg-account-data.js";
+import {PgAccountData, PgAdminStore} from "../infrastructure/pg-account-data.js";
 import {BapcNotifier, customerEmails} from "../infrastructure/bapc-notifications.js";
 import {BapcBillingClient, BapcIdentityClient} from "../infrastructure/bapc-accounts.js";
 import {EnrollmentService} from "../application/enrollment.js";
@@ -97,7 +97,7 @@ const trialTimer=setInterval(()=>void refreshTrials(),TRIAL_REFRESH_MS);
 const joinScript=readFileSync(JOIN_SCRIPT_PATH,"utf8");
 const handler=createPortalHandler({
   origin:(env.PORTAL_PUBLIC_ORIGIN??"https://vpn.bapc.app").replace(/\/$/,""),
-  identity,billing,sessions:customers,devices,join:deviceJoin,joinScript:()=>joinScript,trials:()=>trials,accountData,mail,
+  identity,billing,sessions:customers,devices,join:deviceJoin,joinScript:()=>joinScript,trials:()=>trials,accountData,mail,admin:new PgAdminStore(db),
   ...(env.BAPC_BILLING_HOOK_SECRET?{billingHookSecret:env.BAPC_BILLING_HOOK_SECRET}:{})
 });
 

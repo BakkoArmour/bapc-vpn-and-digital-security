@@ -209,3 +209,40 @@ export const termsPage=(signedIn:boolean)=>layout("BAPC VPN terms",`<div class="
 <h2>Service</h2><p>We work to keep BAPC VPN fast and available, but we can't promise it will never be interrupted. The service is provided "as is", to the extent the law allows.</p>
 <h2>Changes</h2><p>If we change these terms or prices, we'll tell you by email before the change affects you.</p>
 <h2>Contact</h2><p>BAPC Support: <a href="${SUPPORT_URL}">support.bapc.app</a> or <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p></div>`,{signedIn});
+
+// --- staff admin (/admin): bapc.app admins only, enforced in portal-handler.ts on every request ---
+const when=(d:Date|null)=>d?esc(d.toISOString().replace("T"," ").slice(0,16))+" UTC":"—";
+const adminNav=`<p class="muted"><a href="/admin">All accounts</a> &middot; <a href="${SUPPORT_URL}">BAPC Help Desk</a> &middot; <a href="https://billing.bapc.app/admin">BAPC Billing admin</a></p>`;
+
+export const adminListPage=(v:{rows:import("../application/account-data.js").AdminAccountRow[];total:number;page:number;pageSize:number;search:string;staff:string})=>{
+  const pages=Math.max(1,Math.ceil(v.total/v.pageSize));
+  const link=(p:number)=>`/admin?${new URLSearchParams({...(v.search?{q:v.search}:{}),page:String(p)})}`;
+  const rows=v.rows.map(r=>`<tr><td><a href="/admin/accounts/${encodeURIComponent(r.accountId)}">${esc(r.email||"(no email yet)")}</a><div class="muted" style="font-size:13px">${esc(r.accountId)}</div></td>
+<td>${r.activeDevices}${r.pausedDevices?` <span class="status off">+${r.pausedDevices} paused</span>`:""}</td><td>${when(r.lastSignIn)}</td><td>${when(r.firstSeen)}</td></tr>`).join("");
+  return layout("BAPC VPN admin",`<h1 style="margin-top:24px">Customers</h1>${adminNav}
+<p class="muted">Signed in as ${esc(v.staff)} (BAPC admin). ${v.total} account${v.total===1?"":"s"}${v.search?` matching “${esc(v.search)}”`:""}.</p>
+<form method="get" action="/admin"><label for="q">Search by email or account id</label><input id="q" name="q" value="${esc(v.search)}" maxlength="200">
+<p style="margin-top:12px"><button class="button" type="submit">Search</button>${v.search?` <a class="button" href="/admin">Clear</a>`:""}</p></form>
+${rows?`<table><tr><th>Account</th><th>Devices on</th><th>Last sign-in</th><th>First seen</th></tr>${rows}</table>`:`<p class="muted">No accounts${v.search?" match that search":" yet"}.</p>`}
+${pages>1?`<p>${v.page>1?`<a class="button" href="${esc(link(v.page-1))}">Previous</a> `:""}Page ${v.page} of ${pages}${v.page<pages?` <a class="button" href="${esc(link(v.page+1))}">Next</a>`:""}</p>`:""}`,{signedIn:true});
+};
+
+export const adminAccountPage=(v:{detail:import("../application/account-data.js").AdminAccountDetail;access:AccessState|null;csrf:string;msg?:string|undefined})=>{
+  const d=v.detail,id=encodeURIComponent(d.accountId);
+  const plan=v.access===null?`<p class="notice">BAPC Billing couldn't be reached just now.</p>`
+    :`<p><span class="status ${v.access.paid?"on":"off"}">${v.access.paid?(v.access.status==="trialing"?"Free trial":"Paying"):"No active plan"}</span> &middot; ${esc(v.access.plan??"no plan")} &middot; status ${esc(v.access.status)}${v.access.renewsOrEnds?` &middot; ${v.access.cancelAtPeriodEnd?"ends":"renews"} ${when(new Date(v.access.renewsOrEnds))}`:""}</p>`;
+  const devices=d.devices.map(x=>`<tr><td>${esc(x.name)}<div class="muted" style="font-size:13px">${esc(DEVICE_KINDS[x.kind as DeviceKind]??x.kind)} &middot; ${esc(x.address)} &middot; added ${when(x.createdAt)}</div></td>
+<td>${x.removedAt?`<span class="muted">Removed ${when(x.removedAt)}</span>`:x.suspended?`<span class="status off">Paused</span>`:`<span class="status on">On</span>`}</td><td>${when(x.lastHandshake)}</td>
+<td style="text-align:right">${x.removedAt?"":`<form class="inline" method="post" action="/admin/accounts/${id}/devices/${esc(x.nodeId)}/revoke"><input type="hidden" name="csrf" value="${esc(v.csrf)}"><button class="button danger" type="submit">Revoke</button></form>`}</td></tr>`).join("");
+  const activity=d.activity.map(a=>`<tr><td>${when(a.at)}</td><td>${esc(a.actor)}</td><td>${esc(a.action)}</td><td class="muted" style="font-size:13px">${esc(Object.entries(a.detail).map(([k,val])=>`${k}=${typeof val==="string"?val:JSON.stringify(val)}`).join(" ").slice(0,160))}</td></tr>`).join("");
+  return layout("BAPC VPN admin · account",`<h1 style="margin-top:24px">${esc(d.email??"Account")}</h1>${adminNav}
+<p class="muted">bapc.app account ${esc(d.accountId)}</p>${v.msg?`<div class="notice">${esc(v.msg)}</div>`:""}
+<section><h2>Plan</h2>${plan}<form method="post" action="/admin/accounts/${id}/recheck"><input type="hidden" name="csrf" value="${esc(v.csrf)}"><button class="button" type="submit">Re-check payment now</button></form></section>
+<section><h2>Devices</h2>${devices?`<table><tr><th>Device</th><th>Status</th><th>Last connected</th><th></th></tr>${devices}</table>`:`<p class="muted">No devices.</p>`}</section>
+<section><h2>Recent activity</h2>${activity?`<table><tr><th>When</th><th>By</th><th>What</th><th>Details</th></tr>${activity}</table>`:`<p class="muted">Nothing recorded.</p>`}</section>
+<section><h2>Close this account</h2><div class="card"><p>Revokes every device and erases this customer's BAPC VPN data, as if they closed it themselves. Refused while their plan would still renew (cancel it in BAPC Billing first). Can't be undone.</p>
+<form method="post" action="/admin/accounts/${id}/close"><input type="hidden" name="csrf" value="${esc(v.csrf)}">
+<label for="reason">Reason (kept in the audit log)</label><input id="reason" name="reason" required maxlength="300" placeholder="e.g. customer asked by email, ticket #123">
+<label for="confirm">Type DELETE to confirm</label><input id="confirm" name="confirm" required pattern="DELETE" maxlength="10" autocomplete="off">
+<p style="margin-top:16px"><button class="button danger" type="submit">Close account</button></p></form></div></section>`,{signedIn:true});
+};

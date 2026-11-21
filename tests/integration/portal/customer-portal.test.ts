@@ -14,7 +14,7 @@ import {AccountAttestedVerifier} from "../../../src/infrastructure/attestation/a
 import {BapcBillingClient, type AccessState} from "../../../src/infrastructure/bapc-accounts.js";
 import {createPortalHandler, verifyBillingHook, type PortalSessionStore} from "../../../src/runtime/portal-handler.js";
 import {AuthorizationError} from "../../../src/domain/errors.js";
-import type {AccountDataStore, AccountExport} from "../../../src/application/account-data.js";
+import type {AccountDataStore, AccountExport, AdminAccountDetail, AdminStore} from "../../../src/application/account-data.js";
 import {BapcNotifier} from "../../../src/infrastructure/bapc-notifications.js";
 
 // The customer portal end to end against in-memory stores: account-attested
@@ -50,9 +50,9 @@ class MemoryCustomers implements CustomerStore, PortalSessionStore {
 }
 
 class MemoryAccountData implements AccountDataStore {
-  log:{accountId:string;actor:"customer"|"system";action:string;detail:Record<string,unknown>;ip:string|null;at:Date}[]=[];
+  log:{accountId:string;actor:"customer"|"system"|"staff";action:string;detail:Record<string,unknown>;ip:string|null;at:Date}[]=[];
   constructor(private customers:MemoryCustomers){}
-  async audit(accountId:string,actor:"customer"|"system",action:string,detail:Record<string,unknown>={},ip:string|null=null){this.log.push({accountId,actor,action,detail,ip,at:new Date()});}
+  async audit(accountId:string,actor:"customer"|"system"|"staff",action:string,detail:Record<string,unknown>={},ip:string|null=null){this.log.push({accountId,actor,action,detail,ip,at:new Date()});}
   async hasSignedInBefore(accountId:string){return this.log.some(e=>e.accountId===accountId&&e.action==="auth.signed_in");}
   async exportAccount(accountId:string):Promise<AccountExport>{
     return {
@@ -68,6 +68,27 @@ class MemoryAccountData implements AccountDataStore {
     for(const [h,s] of this.customers.sessionsByHash)if(s.accountId===accountId){this.customers.sessionsByHash.delete(h);sessions++;}
     for(const e of this.log)if(e.accountId===accountId){e.accountId="erased";e.detail={};e.ip=null;auditRows++;}
     return {devices,invites:0,sessions,auditRows};
+  }
+}
+
+// Staff view over the same in-memory stores.
+class MemoryAdmin implements AdminStore {
+  constructor(private customers:MemoryCustomers,private data:MemoryAccountData){}
+  private ids(){return [...new Set([...[...this.customers.rows.values()].map(r=>r.account.accountId),...this.data.log.filter(e=>e.action==="auth.signed_in").map(e=>e.accountId)])].filter(a=>a!=="erased");}
+  private email(id:string){return [...this.customers.rows.values()].find(r=>r.account.accountId===id)?.account.email??[...this.customers.sessionsByHash.values()].find(x=>x.accountId===id)?.email??"";}
+  async listAccounts(q:{search?:string;page:number;pageSize:number}){
+    const search=(q.search??"").toLowerCase();
+    const all=this.ids().map(id=>({accountId:id,email:this.email(id),
+      activeDevices:[...this.customers.rows.values()].filter(r=>r.account.accountId===id&&!r.removed&&!r.suspended).length,
+      pausedDevices:[...this.customers.rows.values()].filter(r=>r.account.accountId===id&&!r.removed&&r.suspended).length,
+      lastSignIn:null,firstSeen:null})).filter(r=>!search||r.email.includes(search)||r.accountId===search);
+    return {rows:all.slice((q.page-1)*q.pageSize,q.page*q.pageSize),total:all.length};
+  }
+  async accountDetail(id:string):Promise<AdminAccountDetail|null>{
+    if(!this.ids().includes(id))return null;
+    return {accountId:id,email:this.email(id)||null,
+      devices:[...this.customers.rows.entries()].filter(([,r])=>r.account.accountId===id).map(([nodeId,r])=>({nodeId,name:r.account.deviceName,kind:r.kind,address:"",createdAt:r.createdAt,suspended:r.suspended,removedAt:r.removed?new Date():null,lastHandshake:null})),
+      activity:this.data.log.filter(e=>e.accountId===id).map(({accountId:_a,...e})=>e)};
   }
 }
 
@@ -168,7 +189,7 @@ const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>
     origin:"http://portal.test",
     identity:{
       authorizeUrl:(redirectUri,state)=>`https://bapc.example/oauth/authorize?state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`,
-      exchange:async(code)=>code==="good"?{id:ACCOUNT.accountId,email:"Pat@Example.com",name:"Pat",role:"user",emailVerified:true}:null
+      exchange:async(code)=>code==="good"?{id:ACCOUNT.accountId,email:"Pat@Example.com",name:"Pat",role:"user",emailVerified:true}:code==="admin"?{id:"staff-1",email:"Boss@BAPC.app",name:"Boss",role:"admin",emailVerified:true}:null
     },
     billing:{
       checkoutUrl:(plan,account)=>`https://billing.example/checkout?plan=${plan}&account=${account}`,
@@ -179,7 +200,7 @@ const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>
       }
     },
     sessions:ctx.customers,devices:ctx.devices,join:ctx.join,joinScript:()=>"# script",
-    trials:()=>opts.trials??{},accountData,mail,...(opts.hookSecret?{billingHookSecret:opts.hookSecret}:{})
+    trials:()=>opts.trials??{},accountData,mail,admin:new MemoryAdmin(ctx.customers,accountData),...(opts.hookSecret?{billingHookSecret:opts.hookSecret}:{})
   });
   const server:Server=createServer((q,s)=>void handler(q,s));
   await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
@@ -516,4 +537,63 @@ test("without a hook secret the route says it isn't configured",async()=>{
   const {server,base}=await startPortal({value:true});
   try{assert.equal((await postHook(base,{event_id:"e",type:"plan.changed",app:"bapc-vpn",account:"a",paid:true})).status,503);}
   finally{server.close();}
+});
+
+// --- staff admin (/admin) ---
+
+const signInAs=async(base:string,code:string)=>{
+  const start=await fetch(`${base}/auth/start?next=/admin`,{redirect:"manual"});
+  const state=new URL(start.headers.get("location")!).searchParams.get("state")!;
+  const cb=await fetch(`${base}/auth/callback?state=${state}&code=${code}`,{redirect:"manual"});
+  return cb.headers.get("set-cookie")!.split(";")[0]!;
+};
+
+test("the admin area is invisible to customers and signed-out visitors (404 everywhere, even for POST)",async()=>{
+  const {server,base,customers}=await startPortal({value:true});
+  try{
+    assert.equal((await fetch(`${base}/admin`,{redirect:"manual"})).status,404);
+    const cookie=await signIn(base);
+    for(const p of ["/admin","/admin/accounts/user-1"])assert.equal((await fetch(base+p,{headers:{cookie}})).status,404,p);
+    const csrf=[...customers.sessionsByHash.values()][0]!.csrfToken;
+    assert.equal((await formPost(base,cookie,"/admin/accounts/user-1/close",{csrf,confirm:"DELETE",reason:"x"})).status,404);
+  }finally{server.close();}
+});
+
+test("a BAPC admin lists and searches customers, opens one, revokes a device and closes the account, all audited as staff",async()=>{
+  const paid={value:true};
+  const {server,base,customers,accountData,repo}=await startPortal(paid);
+  try{
+    const pat=await signIn(base);
+    const patCsrf=[...customers.sessionsByHash.values()][0]!.csrfToken;
+    await formPost(base,pat,"/account/devices",{csrf:patCsrf,kind:"android",name:"Pat phone"});
+    await formPost(base,pat,"/account/devices",{csrf:patCsrf,kind:"iphone",name:"Pat iPad"});
+    const boss=await signInAs(base,"admin");
+    const bossCsrf=[...customers.sessionsByHash.values()].find(x=>x.email==="boss@bapc.app")!.csrfToken;
+    const list=await (await fetch(`${base}/admin`,{headers:{cookie:boss}})).text();
+    assert.match(list,/pat@example\.com/);assert.match(list,/2 accounts/);assert.match(list,/admin\/accounts\/staff-1/,"anyone who signed in is listed, staff too (as in the real store)");
+    assert.match(await (await fetch(`${base}/admin?q=nobody`,{headers:{cookie:boss}})).text(),/No accounts match/);
+    assert.match(await (await fetch(`${base}/admin?q=PAT`,{headers:{cookie:boss}})).text(),/pat@example\.com/);
+    const page=await (await fetch(`${base}/admin/accounts/user-1`,{headers:{cookie:boss}})).text();
+    assert.match(page,/Pat phone/);assert.match(page,/Pat iPad/);assert.match(page,/Paying/);assert.match(page,/device\.added/);
+    assert.equal((await fetch(`${base}/admin/accounts/nope`,{headers:{cookie:boss}})).status,404);
+    const nodeId=[...customers.rows.entries()].find(([,r])=>r.account.deviceName==="Pat phone")![0];
+    assert.equal((await formPost(base,boss,`/admin/accounts/user-1/devices/${nodeId}/revoke`,{confirm:"x"})).status,403,"CSRF required");
+    const rv=await formPost(base,boss,`/admin/accounts/user-1/devices/${nodeId}/revoke`,{csrf:bossCsrf});
+    assert.match(decodeURIComponent(rv.headers.get("location")!),/Device revoked/);
+    assert.equal((await repo.get(repo.nodes.get(nodeId)!.deviceId))!.revoked,true);
+    const rc=await formPost(base,boss,"/admin/accounts/user-1/recheck",{csrf:bossCsrf});
+    assert.match(decodeURIComponent(rc.headers.get("location")!),/Billing says: paid/);
+    const noReason=await formPost(base,boss,"/admin/accounts/user-1/close",{csrf:bossCsrf,confirm:"DELETE"});
+    assert.match(decodeURIComponent(noReason.headers.get("location")!),/give a reason/);
+    const renewing=await formPost(base,boss,"/admin/accounts/user-1/close",{csrf:bossCsrf,confirm:"DELETE",reason:"asked by email"});
+    assert.match(decodeURIComponent(renewing.headers.get("location")!),/Cancel it in BAPC Billing first/);
+    const staffActions=accountData.log.filter(e=>e.actor==="staff");
+    assert.deepEqual(staffActions.map(e=>e.action),["staff.device_revoked","staff.payment_rechecked"]);
+    assert.ok(staffActions.every(e=>e.detail.staff==="boss@bapc.app"&&e.ip));
+    paid.value=false;
+    const closed=await formPost(base,boss,"/admin/accounts/user-1/close",{csrf:bossCsrf,confirm:"DELETE",reason:"asked by email, ticket 42"});
+    assert.equal(closed.status,303);
+    assert.ok([...customers.rows.values()].every(r=>r.removed&&r.account.email===""),"devices revoked and data erased");
+    assert.ok(accountData.log.some(e=>e.action==="staff.account_closed"),"closure recorded (pseudonymised with the rest)");
+  }finally{server.close();}
 });

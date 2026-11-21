@@ -12,7 +12,7 @@ import {generateWireGuardKeyPair} from "../../native/shared/wireguard-keys.js";
 // this only ever acts on an account the portal has already signed in, and
 // suspends/restores devices from whatever Billing reports.
 
-export interface CustomerSession {tokenHash:string;accountId:string;email:string;name:string|null;csrfToken:string;}
+export interface CustomerSession {tokenHash:string;accountId:string;email:string;name:string|null;csrfToken:string;role?:"user"|"admin";}
 export interface CustomerDevice {nodeId:string;name:string;kind:string;createdAt:Date;suspended:boolean;address:string;}
 
 export interface CustomerStore {

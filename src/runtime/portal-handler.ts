@@ -7,10 +7,10 @@ import {MemoryRateLimiter, type RateLimitRule} from "../api/rest/rate-limit.js";
 import {DEVICE_KINDS, isDeviceKind, type CustomerDeviceService, type CustomerSession} from "../application/customer-devices.js";
 import type {DeviceJoinService} from "../application/device-join.js";
 import {randomToken, sha256Hex, type AccessState, type BapcUser} from "../infrastructure/bapc-accounts.js";
-import type {AccountDataStore} from "../application/account-data.js";
+import type {AccountDataStore, AdminStore} from "../application/account-data.js";
 import {customerEmails, type CustomerEmail, type SendOutcome} from "../infrastructure/bapc-notifications.js";
 import {
-  accountPage, appDevicePage, helpPage, isPlanId, landingPage, messagePage, privacyPage, termsPage, windowsInvitePage, type TrialDays
+  accountPage, adminAccountPage, adminListPage, appDevicePage, helpPage, isPlanId, landingPage, messagePage, privacyPage, termsPage, windowsInvitePage, type TrialDays
 } from "./portal-pages.js";
 
 // The customer-facing site (vpn.bapc.app): marketing + pricing, Sign in
@@ -39,6 +39,8 @@ export interface PortalDeps {
   trials?:()=>TrialDays;
   // Audit trail, data export and erasure (db/022). Required in production (customer-portal.ts always passes it).
   accountData:AccountDataStore;
+  // Staff admin (/admin) for bapc.app admins. Without it, /admin doesn't exist.
+  admin?:AdminStore;
   // Customer email (BAPC Notifications). Optional: without it nothing is sent.
   mail?:{send(to:string,subject:string,text:string):Promise<SendOutcome>};
   // Signing secret for BAPC Billing's plan.changed hook (POST /api/v1/billing/hook). Unset = the route answers 503
@@ -108,7 +110,7 @@ export const createPortalHandler=(deps:PortalDeps)=>{
   };
 
   // The audit trail must never take a customer's action down with it: a failed write is logged, not thrown.
-  const audit=async(accountId:string,action:string,detail:Record<string,unknown>={},ip:string|null=null,actor:"customer"|"system"="customer")=>{
+  const audit=async(accountId:string,action:string,detail:Record<string,unknown>={},ip:string|null=null,actor:"customer"|"system"|"staff"="customer")=>{
     try{await deps.accountData.audit(accountId,actor,action,detail,ip);}
     catch(error){console.error(JSON.stringify({event:"portal.audit_failed",action,error:error instanceof Error?error.message:String(error)}));}
   };
@@ -203,7 +205,7 @@ export const createPortalHandler=(deps:PortalDeps)=>{
       if(!user){send(res,400,messagePage("Sign-in didn't finish","bapc.app couldn't confirm the sign-in. Please try again."));return;}
       if(!user.emailVerified){send(res,403,messagePage("Confirm your email first","Open the confirmation email from bapc.app, then sign in again."));return;}
       const token=randomToken();
-      await deps.sessions.createSession(sha256Hex(token),{accountId:user.id,email:user.email.toLowerCase(),name:user.name||null,csrfToken:randomToken()},
+      await deps.sessions.createSession(sha256Hex(token),{accountId:user.id,email:user.email.toLowerCase(),name:user.name||null,csrfToken:randomToken(),role:user.role==="admin"?"admin":"user"},
         new Date(Date.now()+SESSION_HOURS*3_600_000));
       const firstVisit=!(await deps.accountData.hasSignedInBefore(user.id).catch(()=>true));
       await audit(user.id,"auth.signed_in",{},ip);
@@ -217,6 +219,62 @@ export const createPortalHandler=(deps:PortalDeps)=>{
       if(s)await audit(s.accountId,"auth.signed_out",{},ip);
       redirect(res,"/",[cookie("",0)]);
       return;
+    }
+
+    // --- staff admin: bapc.app admins only. Everyone else (signed out, or a customer) gets a plain 404, so the
+    // area doesn't even show it exists. Re-checked on every request from the session's stored role. ---
+    if(path==="/admin"||path.startsWith("/admin/")){
+      if(!deps.admin||!s||s.role!=="admin")throw Object.assign(new Error("Page not found"),{status:404});
+      const staff={staff:s.email};
+      if(method==="GET"&&path==="/admin"){
+        const search=(url.searchParams.get("q")??"").slice(0,200);
+        const page=Math.max(1,Math.min(10_000,Number(url.searchParams.get("page"))||1)),pageSize=50;
+        const {rows,total}=await deps.admin.listAccounts({search,page,pageSize});
+        send(res,200,adminListPage({rows,total,page,pageSize,search,staff:s.email}));
+        return;
+      }
+      const m=path.match(/^\/admin\/accounts\/([^/]{1,200})(\/.*)?$/);
+      if(!m)throw Object.assign(new Error("Page not found"),{status:404});
+      const accountId=decodeURIComponent(m[1]!),rest=m[2]??"";
+      const back=(msg:string)=>redirect(res,`/admin/accounts/${encodeURIComponent(accountId)}?msg=${encodeURIComponent(msg)}`);
+      if(method==="GET"&&rest===""){
+        const detail=await deps.admin.accountDetail(accountId);
+        if(!detail)throw Object.assign(new Error("No such account"),{status:404});
+        const access=deps.billing?await deps.billing.access(accountId).catch(()=>null):null;
+        send(res,200,adminAccountPage({detail,access,csrf:s.csrfToken,msg:url.searchParams.get("msg")?.slice(0,200)}));
+        return;
+      }
+      if(method!=="POST")throw Object.assign(new Error("Page not found"),{status:404});
+      const form=new URLSearchParams(await readBody(req,8_000));
+      if(!sameToken(form.get("csrf")??"",s.csrfToken))throw Object.assign(new Error("This form expired. Go back, reload the page and try again."),{status:403});
+      const detail=await deps.admin.accountDetail(accountId);
+      if(!detail)throw Object.assign(new Error("No such account"),{status:404});
+      const revoke=rest.match(/^\/devices\/([0-9a-f-]{36})\/revoke$/);
+      if(revoke){
+        await deps.devices.removeDevice(accountId,revoke[1]!);
+        await audit(accountId,"staff.device_revoked",{...staff,node_id:revoke[1]},ip,"staff");
+        back("Device revoked. It can't connect any more.");return;
+      }
+      if(rest==="/recheck"){
+        const access=await checkAccess(accountId,detail.email??undefined);
+        await audit(accountId,"staff.payment_rechecked",{...staff,paid:access?.paid??null},ip,"staff");
+        back(access?`Billing says: ${access.paid?"paid":"not paid"} (${access.status}). Devices updated to match.`:"BAPC Billing couldn't be reached; nothing changed.");return;
+      }
+      if(rest==="/close"){
+        limit("closeAccount");
+        const reason=(form.get("reason")??"").trim().slice(0,300);
+        if((form.get("confirm")??"").trim()!==DELETE_CONFIRMATION||!reason){back(`Type ${DELETE_CONFIRMATION} and give a reason to close the account.`);return;}
+        const access=deps.billing?await checkAccess(accountId):{paid:false,cancelAtPeriodEnd:false} as Pick<AccessState,"paid"|"cancelAtPeriodEnd">;
+        if(access===null){back("BAPC Billing couldn't be reached, so nothing was deleted.");return;}
+        if(access.paid&&!access.cancelAtPeriodEnd){back("Their plan would still renew. Cancel it in BAPC Billing first; nothing was deleted.");return;}
+        const revoked=await deps.devices.revokeAll(accountId);
+        await audit(accountId,"staff.account_closed",{...staff,reason,devices_revoked:revoked},ip,"staff");
+        if(detail.email)await email(detail.email,accountId,"account_closed",customerEmails.accountClosed());
+        const erased=await deps.accountData.eraseAccount(accountId);
+        console.log(JSON.stringify({event:"portal.account_closed_by_staff",staff:s.email,devicesRevoked:revoked,...erased}));
+        redirect(res,`/admin?q=&page=1`);return;
+      }
+      throw Object.assign(new Error("Page not found"),{status:404});
     }
 
     // --- account (signed in only) ---

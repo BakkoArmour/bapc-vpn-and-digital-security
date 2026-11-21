@@ -30,18 +30,18 @@ export class PgCustomerStore implements CustomerStore, CustomerDeviceRecorder {
   async createSession(tokenHash:string,s:Omit<CustomerSession,"tokenHash">,expiresAt:Date):Promise<void>{
     await this.db.query(`DELETE FROM ${T}.portal_sessions WHERE expires_at<now()`);
     await this.db.query(
-      `INSERT INTO ${T}.portal_sessions(token_hash,account_id,email,name,csrf_token,expires_at) VALUES($1,$2,$3,$4,$5,$6)`,
-      [tokenHash,s.accountId,s.email,s.name,s.csrfToken,expiresAt]
+      `INSERT INTO ${T}.portal_sessions(token_hash,account_id,email,name,csrf_token,expires_at,role) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+      [tokenHash,s.accountId,s.email,s.name,s.csrfToken,expiresAt,s.role==="admin"?"admin":"user"]
     );
   }
 
   async session(tokenHash:string):Promise<CustomerSession|null>{
     const r=await this.db.query(
-      `SELECT token_hash,account_id,email,name,csrf_token FROM ${T}.portal_sessions WHERE token_hash=$1 AND expires_at>now()`,
+      `SELECT token_hash,account_id,email,name,csrf_token,role FROM ${T}.portal_sessions WHERE token_hash=$1 AND expires_at>now()`,
       [tokenHash]
     );
     const x=r.rows[0];
-    return x?{tokenHash:x.token_hash,accountId:x.account_id,email:x.email,name:x.name,csrfToken:x.csrf_token}:null;
+    return x?{tokenHash:x.token_hash,accountId:x.account_id,email:x.email,name:x.name,csrfToken:x.csrf_token,role:x.role==="admin"?"admin":"user"}:null;
   }
 
   async deleteSession(tokenHash:string):Promise<void>{
