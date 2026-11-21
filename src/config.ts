@@ -85,7 +85,9 @@ export const loadConfig=(env:NodeJS.ProcessEnv=process.env):SecurityConfig=>{
   const gateway=vpnGateway(env);
   return {
     environment,attestationProvider,
-    databaseUrl:env.DATABASE_URL??"postgres://localhost/bapc_security_core",
+    // DATABASE_URL, or (under BAPC App Hosting, with Cheisgos) the standard PGHOST/PGPORT/PGDATABASE/PGUSER/
+    // PGPASSWORD/PGSSLMODE variables, which the pg driver reads itself when no URL is given.
+    databaseUrl:env.DATABASE_URL??(env.PGHOST?"":"postgres://localhost/bapc_security_core"),
     certificateTtlMinutes:int(env.CERTIFICATE_TTL_MINUTES,1440),
     keyRotationDays:int(env.KEY_ROTATION_DAYS,30),
     safeApplyTimeoutMs:int(env.SAFE_APPLY_TIMEOUT_MS,60_000),
