@@ -93,18 +93,19 @@ team roles). See `bapc-cloud-and-deploy/deploy/audit/exceptions.md`.
 
 ## Staging
 
-https://staging-vpn.bapc.app runs on the same server **without Docker** (systemd + host PostgreSQL 18; see
-[deploy/native/README.md](../deploy/native/README.md)): its own database (`bapc_security_staging`), secrets
-(`/etc/bapc-vpn/staging.env`) and ports (18080/18095/...). It has no VPN gateway and no Billing, sign-in, email, Warehouse or
-Observability keys, and it tells search engines not to index it. Ship to staging first:
-`systemd-run --unit=bapc-vpn-release-staging bash /opt/bapc-vpn-native-setup/native/release.sh staging <bundle> <sha>`
-(same build, checks and automatic rollback as production's).
+https://staging-vpn.bapc.app runs **on BAPC infrastructure, without Docker** (since 21 Nov 2026, release a770ba4):
+the nine services are App Hosting apps (project `bapc-vpn`, stage staging, cluster `bapc-vpn`, rootless Podman under the
+`bapc-host` user, ports 18080/18095/60051/18181/18090/15353 udp/61900 udp/11080 on 127.0.0.1); the database is the
+Cheisgos cluster `vpn-staging` (PostgreSQL 18, 127.0.0.1:54320, TLS, encrypted storage, pgBackRest WAL archiving),
+database `bapc_vpn`, roles `bapc_vpn_migrator` / `bapc_vpn_rw`; secrets in BAPC Secrets environment `bapc-vpn-staging`;
+image `registry.bapc.app/bapc-vpn/core` (signed). No gateway, Billing, sign-in, email, Warehouse or Observability keys;
+not indexed. Ship to staging: [deploy/hosting/README.md](../deploy/hosting/README.md) ("Every release after that").
+The earlier systemd copy (`deploy/native/`) is kept, disabled, as a fallback.
 
 ## Known open items
 
 - Observability token not issued yet (errors are only in local logs).
-- Production still runs on Docker. The move to BAPC infrastructure (App Hosting + Cheisgos + Secrets + Registry) is
-  built and tested in code ([deploy/hosting/README.md](../deploy/hosting/README.md)); it needs the one-time setup there
-  (owner's yes on each marked step), staging first, then a production window. `deploy/native/` (plain systemd) runs
-  staging today and stays as the fallback.
+- Production still runs on Docker. Staging already runs on App Hosting + Cheisgos; production follows the same
+  [deploy/hosting](../deploy/hosting/README.md) steps (its own Cheisgos cluster, Secrets environment, settings file) in a
+  maintenance window with the owner's yes.
 - Trust Core signs with a development CA held in Postgres (no KMS/HSM); secrets live in `.env`, not the BAPC vault.
