@@ -97,6 +97,12 @@ curl -fsS -o /dev/null "http://127.0.0.1:$((8095 + PORT_OFF))/healthz" || die "p
 PUBLIC=$([ "$STAGE" = production ] && echo https://vpn.bapc.app || echo https://staging-vpn.bapc.app)
 curl -fsS -o /dev/null "$PUBLIC/" || die "$PUBLIC does not answer"
 trap - ERR
+# The old copy must not come back by itself after a reboot and take the ports: kept, but not started automatically.
+if [ "$STAGE" = production ]; then
+  (cd /opt/bapc-vpn/deploy && docker update --restart=no $(docker compose ps -aq) >/dev/null) && log "Docker containers kept, set not to restart"
+else
+  systemctl disable -q bapc-vpn@staging.target && log "systemd staging copy kept, disabled"
+fi
 if [ "$STAGE" = production ]; then
   log "pointing the nightly backup at Cheisgos (test restore on the local PostgreSQL)"
   umask 077
