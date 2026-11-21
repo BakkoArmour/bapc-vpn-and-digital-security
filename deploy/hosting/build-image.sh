@@ -7,7 +7,7 @@
 # Needs, once per machine (see deploy/hosting/README.md):
 #   /etc/bapc-vpn/registry-push.json   podman auth file: a BAPC Login client of app bapc-vpn with registry:push registry:promote
 #   /etc/bapc-vpn/registry-client.env  REGISTRY_CLIENT_ID / REGISTRY_CLIENT_SECRET of the same client (for the promotion API)
-#   /etc/bapc-vpn/signing/sigstore.key (+ sigstore.pass)  made with `skopeo generate-sigstore-key`; its .pub is a trusted
+#   /etc/bapc-vpn/signing/sigstore.private (+ sigstore.pass)  made with `skopeo generate-sigstore-key`; its .pub is a trusted
 #                                       key in the Registry console. The private key never leaves this machine.
 #   /etc/containers/registries.d/registry.bapc.app.yaml   use-sigstore-attachments: true
 # Prints the pushed digest on the last line (sha256:...), which deploy/hosting/release.mjs deploys.
@@ -19,7 +19,7 @@ case "$STAGE" in staging|production) ;; *) echo "stage must be staging or produc
 REPO=registry.bapc.app/bapc-vpn/core
 ETC=/etc/bapc-vpn
 log(){ printf '%s build %s: %s\n' "$(date -u +%FT%TZ)" "$SHA" "$*" >&2; }
-for f in "$ETC/registry-push.json" "$ETC/registry-client.env" "$ETC/signing/sigstore.key" "$ETC/signing/sigstore.pass"; do
+for f in "$ETC/registry-push.json" "$ETC/registry-client.env" "$ETC/signing/sigstore.private" "$ETC/signing/sigstore.pass"; do
   [ -s "$f" ] || { log "missing $f (one-time setup in deploy/hosting/README.md)"; exit 1; }
 done
 
@@ -29,13 +29,15 @@ tar -xzf "$BUNDLE" -C "$CTX" --strip-components=1
 rm -f "$CTX/deploy/.env"
 
 log "1/4 podman build"
-podman build --pull=missing --layers -f "$CTX/deploy/Dockerfile" -t "$REPO:$SHA" \
+# --network=host: a build needs no network of its own, and Docker's firewall drops forwarded traffic from
+# rootful Podman bridges on this machine (packages would not download).
+podman build --network=host --pull=missing --layers -f "$CTX/deploy/Dockerfile" -t "$REPO:$SHA" \
   --label "org.opencontainers.image.revision=$SHA" --label "org.opencontainers.image.source=bapc/bapc-vpn-and-digital-security" "$CTX" >&2
 
 log "2/4 signing and pushing to the BAPC Registry"
 DIGESTFILE="$CTX/digest"
 podman push --authfile "$ETC/registry-push.json" \
-  --sign-by-sigstore-private-key "$ETC/signing/sigstore.key" --sign-passphrase-file "$ETC/signing/sigstore.pass" \
+  --sign-by-sigstore-private-key "$ETC/signing/sigstore.private" --sign-passphrase-file "$ETC/signing/sigstore.pass" \
   --digestfile "$DIGESTFILE" "$REPO:$SHA" >&2
 DIGEST=$(cat "$DIGESTFILE")
 [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { log "push gave no digest"; exit 1; }
