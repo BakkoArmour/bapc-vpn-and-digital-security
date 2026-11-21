@@ -597,3 +597,28 @@ test("a BAPC admin lists and searches customers, opens one, revokes a device and
     assert.ok(accountData.log.some(e=>e.action==="staff.account_closed"),"closure recorded (pseudonymised with the rest)");
   }finally{server.close();}
 });
+
+// --- accessibility (WCAG AA) guards ---
+test("pages keep their accessibility basics: language, skip link, focus outline, strong control borders, named buttons, labelled fields",async()=>{
+  const {server,base,customers}=await startPortal({value:true});
+  try{
+    const home=await (await fetch(base)).text();
+    assert.match(home,/<html lang="en">/);
+    assert.match(home,/<a class="skip" href="#main">Skip to content<\/a>/);
+    assert.match(home,/<main id="main"/);
+    assert.match(home,/:focus-visible\{outline:3px solid var\(--accent\)/,"keyboard focus is clearly visible");
+    assert.match(home,/--control:#64759e/,"input and button outlines meet 3:1");
+    assert.doesNotMatch(home,/outline:\s*none/);
+    assert.match(home,/footer a\{[^}]*min-height:24px/,"footer tap targets are at least 24px");
+    const cookie=await signIn(base);
+    const csrf=[...customers.sessionsByHash.values()][0]!.csrfToken;
+    const setup=await (await formPost(base,cookie,"/account/devices",{csrf,kind:"iphone",name:"Kitchen iPad"})).text();
+    assert.match(setup,/class="qr" role="img" aria-label="QR code/,"the QR code has a text alternative");
+    const account=await (await fetch(`${base}/account`,{headers:{cookie}})).text();
+    assert.match(account,/aria-label="Remove Kitchen iPad"/,"each Remove button says which device");
+    // every visible form field has a <label for=…>
+    const ids=[...account.matchAll(/<(?:input|select)(?![^>]*type="hidden")[^>]*\sid="([^"]+)"/g)].map(m=>m[1]!);
+    assert.ok(ids.length>=3);
+    for(const id of ids)assert.match(account,new RegExp(`<label for="${id}">`),`field ${id} has a label`);
+  }finally{server.close();}
+});

@@ -27,7 +27,7 @@ export const SUPPORT_EMAIL="support@bapc.app";
 export const esc=(s:unknown)=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
 
 const CSS=`
-:root{--bg:#0b1020;--panel:#131a30;--line:#24304f;--text:#e8ecf6;--muted:#9aa6c4;--accent:#f5b301;--accent-ink:#1b1400;--ok:#34d399;--warn:#fbbf24;--bad:#f87171}
+:root{--bg:#0b1020;--panel:#131a30;--line:#24304f;--control:#64759e;--text:#e8ecf6;--muted:#9aa6c4;--accent:#f5b301;--accent-ink:#1b1400;--ok:#34d399;--warn:#fbbf24;--bad:#f87171}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{color:var(--accent)}main{max-width:1040px;margin:0 auto;padding:0 16px 64px}
@@ -36,8 +36,8 @@ header{max-width:1040px;margin:0 auto;padding:18px 16px;display:flex;align-items
 nav{display:flex;gap:16px;flex-wrap:wrap;align-items:center}nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--text)}
 .hero{padding:56px 0 32px}.hero h1{font-size:clamp(32px,6vw,52px);line-height:1.1;margin:0 0 16px;max-width:760px}
 .hero p{font-size:19px;color:var(--muted);max-width:640px;margin:0 0 28px}
-.button{display:inline-block;padding:12px 20px;border-radius:10px;border:1px solid var(--line);color:var(--text);text-decoration:none;font-weight:600;background:transparent;font-size:16px;cursor:pointer}
-.button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}.button.danger{color:var(--bad);border-color:#4a2633;padding:6px 12px;font-size:14px}
+.button{display:inline-block;padding:12px 20px;border-radius:10px;border:1px solid var(--control);color:var(--text);text-decoration:none;font-weight:600;background:transparent;font-size:16px;cursor:pointer}
+.button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}.button.danger{color:var(--bad);border-color:var(--bad);padding:6px 12px;font-size:14px}
 .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
 .card h3{margin:0 0 6px;font-size:18px}.card p{margin:0;color:var(--muted)}
@@ -47,12 +47,14 @@ section{margin-top:56px}section>h2{font-size:28px;margin:0 0 18px}
 table{width:100%;border-collapse:collapse}td,th{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}th{color:var(--muted);font-weight:600;font-size:14px}
 .status{font-weight:700}.status.on{color:var(--ok)}.status.off{color:var(--warn)}
 form.inline{display:inline}label{display:block;margin:12px 0 6px;color:var(--muted)}
-input,select{width:100%;max-width:360px;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:#0e1528;color:var(--text);font-size:16px}
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,.button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.skip{position:absolute;left:-10000px;top:8px;background:var(--accent);color:var(--accent-ink);padding:10px 14px;border-radius:8px;font-weight:700;z-index:10}.skip:focus{left:16px}
+input,select{width:100%;max-width:360px;padding:10px 12px;border-radius:8px;border:1px solid var(--control);background:#0e1528;color:var(--text);font-size:16px}
 pre,code{font-family:ui-monospace,Consolas,monospace}pre{background:#060a16;border:1px solid var(--line);border-radius:10px;padding:14px;white-space:pre-wrap;word-break:break-all;font-size:14px}
 .notice{border-left:4px solid var(--warn);padding:12px 16px;background:#1d1a10;border-radius:8px;margin:16px 0}
 .qr{background:#fff;padding:12px;border-radius:12px;display:inline-block;max-width:100%}.qr svg{display:block;width:280px;max-width:100%;height:auto}
 ol li{margin:6px 0}.muted{color:var(--muted)}.legal h2{font-size:20px;margin-top:28px}.legal{max-width:760px}
-footer{max-width:1040px;margin:0 auto;padding:28px 16px;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}footer a{color:var(--muted);margin-right:14px}
+footer{max-width:1040px;margin:0 auto;padding:28px 16px;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}footer a{color:var(--muted);margin-right:14px;display:inline-block;min-height:24px;padding:4px 0;line-height:16px}
 @media (max-width:600px){td,th{padding:8px 4px;font-size:14px}.hero{padding-top:28px}}
 `;
 
@@ -60,11 +62,12 @@ export const layout=(title:string,body:string,opts:{signedIn?:boolean}={})=>`<!d
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><meta name="description" content="BAPC VPN: private, encrypted internet for Windows, Mac, iPhone and Android. $8.99 a month or $2.99 a month yearly.">
 <style>${CSS}</style></head><body>
+<a class="skip" href="#main">Skip to content</a>
 <header><a class="brand" href="/">BAPC <span>VPN</span></a>
 <nav><a href="/#pricing">Pricing</a><a href="/privacy">Privacy</a>${opts.signedIn
   ?`<a href="/account">Your account</a><form class="inline" method="post" action="/auth/logout"><button class="button" type="submit">Sign out</button></form>`
   :`<a class="button" href="/auth/start">Sign in</a>`}</nav></header>
-<main>${body}</main>
+<main id="main" tabindex="-1">${body}</main>
 <footer>&copy; ${new Date().getUTCFullYear()} Bakko Armour LLC &middot; <a href="/help">Help</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="${SUPPORT_URL}">Support</a>
 <p style="margin:10px 0 0">Cookies: this site uses one sign-in cookie, only after you sign in, and nothing for tracking or ads. <a href="/privacy#cookies">Details</a></p></footer>
 </body></html>`;
@@ -114,7 +117,7 @@ export const accountPage=(v:{
 <div class="grid" style="margin-top:12px">${planCards((id,t)=>`<a class="button${id===(v.wantPlan??"yearly")?" primary":""}" href="${esc(v.checkoutUrl(id))}">${t?`Start ${t}-day free trial`:`Pay ${id==="yearly"?"yearly":"monthly"}`}</a>`,v.trials??{})}</div>${longestTrial(v.trials??{})?`<p class="muted">New customers only. Nothing is charged until the trial ends; cancel before then to pay nothing.</p>`:""}`;
   const rows=v.devices.map(d=>`<tr><td>${esc(d.name)}<div class="muted" style="font-size:13px">${esc(DEVICE_KINDS[d.kind as DeviceKind]??d.kind)} &middot; ${esc(d.address)}</div></td>
 <td>${d.suspended?`<span class="status off">Paused</span>`:`<span class="status on">On</span>`}</td>
-<td style="text-align:right"><form class="inline" method="post" action="/account/devices/${esc(d.nodeId)}/remove"><input type="hidden" name="csrf" value="${esc(v.csrf)}"><button class="button danger" type="submit">Remove</button></form></td></tr>`).join("");
+<td style="text-align:right"><form class="inline" method="post" action="/account/devices/${esc(d.nodeId)}/remove"><input type="hidden" name="csrf" value="${esc(v.csrf)}"><button class="button danger" type="submit" aria-label="Remove ${esc(d.name)}">Remove</button></form></td></tr>`).join("");
   const kinds=Object.entries(DEVICE_KINDS).map(([k,label])=>`<option value="${k}">${esc(label)}</option>`).join("");
   return layout("Your BAPC VPN account",`
 <h1 style="margin-top:24px">Your account</h1><p class="muted">Signed in as ${esc(v.email)}</p>
@@ -171,11 +174,11 @@ export const appDevicePage=(v:{kind:DeviceKind;name:string;config:string;qrSvg:s
 <div class="notice"><b>Do this now.</b> For your security this code is shown only once and isn't saved anywhere. If you leave this page, remove the device and add it again.</div>
 <ol><li>Install the free <b>WireGuard</b> app from ${esc(store)}.</li>
 ${scan
-  ?`<li>Open it, tap <b>+</b> (or <b>Add a tunnel</b>), choose <b>Scan from QR code</b>, and scan this:</li></ol><div class="qr">${v.qrSvg}</div><ol start="3">`
+  ?`<li>Open it, tap <b>+</b> (or <b>Add a tunnel</b>), choose <b>Scan from QR code</b>, and scan this:</li></ol><div class="qr" role="img" aria-label="QR code with your BAPC VPN setup, for the WireGuard app">${v.qrSvg}</div><ol start="3">`
   :`<li>Download your setup file: <a class="button primary" download="BAPC-VPN.conf" href="${download}">Download BAPC-VPN.conf</a></li>
 <li>In WireGuard choose <b>Import tunnel(s) from file</b> and pick the downloaded file.${v.kind==="linux"?" On Linux: <code>sudo wg-quick up ./BAPC-VPN.conf</code>":""}</li>`}
 <li>Name it <b>BAPC VPN</b> if asked, then switch it <b>on</b>. You're protected while it's on.</li></ol>
-${scan?`<p class="muted">Setting up on this same phone? <a download="BAPC-VPN.conf" href="${download}">Download the setup file</a> and open it with WireGuard instead.</p>`:`<p class="muted">Or scan this with the WireGuard app:</p><div class="qr">${v.qrSvg}</div>`}
+${scan?`<p class="muted">Setting up on this same phone? <a download="BAPC-VPN.conf" href="${download}">Download the setup file</a> and open it with WireGuard instead.</p>`:`<p class="muted">Or scan this with the WireGuard app:</p><div class="qr" role="img" aria-label="QR code with your BAPC VPN setup, for the WireGuard app">${v.qrSvg}</div>`}
 <p style="margin-top:20px"><a class="button" href="/account">Done, back to your account</a></p>`,{signedIn:true});
 };
 
@@ -233,7 +236,7 @@ export const adminAccountPage=(v:{detail:import("../application/account-data.js"
     :`<p><span class="status ${v.access.paid?"on":"off"}">${v.access.paid?(v.access.status==="trialing"?"Free trial":"Paying"):"No active plan"}</span> &middot; ${esc(v.access.plan??"no plan")} &middot; status ${esc(v.access.status)}${v.access.renewsOrEnds?` &middot; ${v.access.cancelAtPeriodEnd?"ends":"renews"} ${when(new Date(v.access.renewsOrEnds))}`:""}</p>`;
   const devices=d.devices.map(x=>`<tr><td>${esc(x.name)}<div class="muted" style="font-size:13px">${esc(DEVICE_KINDS[x.kind as DeviceKind]??x.kind)} &middot; ${esc(x.address)} &middot; added ${when(x.createdAt)}</div></td>
 <td>${x.removedAt?`<span class="muted">Removed ${when(x.removedAt)}</span>`:x.suspended?`<span class="status off">Paused</span>`:`<span class="status on">On</span>`}</td><td>${when(x.lastHandshake)}</td>
-<td style="text-align:right">${x.removedAt?"":`<form class="inline" method="post" action="/admin/accounts/${id}/devices/${esc(x.nodeId)}/revoke"><input type="hidden" name="csrf" value="${esc(v.csrf)}"><button class="button danger" type="submit">Revoke</button></form>`}</td></tr>`).join("");
+<td style="text-align:right">${x.removedAt?"":`<form class="inline" method="post" action="/admin/accounts/${id}/devices/${esc(x.nodeId)}/revoke"><input type="hidden" name="csrf" value="${esc(v.csrf)}"><button class="button danger" type="submit" aria-label="Revoke ${esc(x.name)}">Revoke</button></form>`}</td></tr>`).join("");
   const activity=d.activity.map(a=>`<tr><td>${when(a.at)}</td><td>${esc(a.actor)}</td><td>${esc(a.action)}</td><td class="muted" style="font-size:13px">${esc(Object.entries(a.detail).map(([k,val])=>`${k}=${typeof val==="string"?val:JSON.stringify(val)}`).join(" ").slice(0,160))}</td></tr>`).join("");
   return layout("BAPC VPN admin · account",`<h1 style="margin-top:24px">${esc(d.email??"Account")}</h1>${adminNav}
 <p class="muted">bapc.app account ${esc(d.accountId)}</p>${v.msg?`<div class="notice">${esc(v.msg)}</div>`:""}
