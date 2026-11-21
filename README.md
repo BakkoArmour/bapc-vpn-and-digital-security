@@ -31,6 +31,7 @@ npm run agent               # endpoint agent          (src/runtime/agent.ts)
 npm run audit:final         # repository self-check — see docs/UNIVERSAL-FINAL-AUDIT.md
 ```
 
+For the live service (release, rollback, backups, monitoring, billing, admin, support) see `docs/PRODUCTION.md`.
 See `docs/OPERATIONS-MANUAL.md` for installation, administration, upgrade
 and rollback, and `docs/INCIDENT-RESPONSE-RUNBOOK.md` for containment,
 certificate compromise, lost-controller, relay/DNS outage and restore

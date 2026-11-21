@@ -1,5 +1,9 @@
 # BAPC VPN & Digital Security — Operations Manual
 
+> **Running the live service?** Start with [PRODUCTION.md](PRODUCTION.md): where it runs, one-step release and rollback,
+> secrets, nightly tested backups, monitoring, billing, customer data, staff admin and support. This manual describes each
+> service and the operator API; where they differ, PRODUCTION.md is current.
+
 ## Services in this repository
 
 | Service | Entry point | npm script | Default bind |
