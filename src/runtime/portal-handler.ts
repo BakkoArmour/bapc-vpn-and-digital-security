@@ -8,7 +8,7 @@ import {isDeviceKind, type CustomerDeviceService, type CustomerSession} from "..
 import type {DeviceJoinService} from "../application/device-join.js";
 import {randomToken, sha256Hex, type AccessState, type BapcUser} from "../infrastructure/bapc-accounts.js";
 import {
-  accountPage, appDevicePage, isPlanId, landingPage, messagePage, privacyPage, termsPage, windowsInvitePage
+  accountPage, appDevicePage, isPlanId, landingPage, messagePage, privacyPage, termsPage, windowsInvitePage, type TrialDays
 } from "./portal-pages.js";
 
 // The customer-facing site (vpn.bapc.app): marketing + pricing, Sign in
@@ -33,6 +33,8 @@ export interface PortalDeps {
   devices:Pick<CustomerDeviceService,"list"|"addWindowsDevice"|"addAppDevice"|"removeDevice"|"applyPaymentState">;
   join:Pick<DeviceJoinService,"join">;
   joinScript:()=>string;
+  // Free-trial days Billing currently gives per plan (cached by the caller); empty = no trial advertised.
+  trials?:()=>TrialDays;
 }
 
 const COOKIE="bapc_vpn_session";
@@ -115,7 +117,7 @@ export const createPortalHandler=(deps:PortalDeps)=>{
 
     limit("page");
     const s=await currentSession(req);
-    if(method==="GET"&&path==="/"){send(res,200,landingPage(!!s));return;}
+    if(method==="GET"&&path==="/"){send(res,200,landingPage(!!s,deps.trials?.()??{}));return;}
     if(method==="GET"&&path==="/privacy"){send(res,200,privacyPage(!!s));return;}
     if(method==="GET"&&path==="/terms"){send(res,200,termsPage(!!s));return;}
 
@@ -163,7 +165,7 @@ export const createPortalHandler=(deps:PortalDeps)=>{
           email:s.email,csrf:s.csrfToken,access,devices:await deps.devices.list(s.accountId),
           wantPlan:isPlanId(wantPlan)?wantPlan:null,
           checkoutUrl:plan=>deps.billing!.checkoutUrl(plan,s.accountId),manageUrl:deps.billing?.manageUrl()??"/",
-          msg:url.searchParams.get("msg")?.slice(0,200)
+          msg:url.searchParams.get("msg")?.slice(0,200),trials:deps.trials?.()??{}
         }));
         return;
       }

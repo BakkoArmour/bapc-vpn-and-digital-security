@@ -23,6 +23,7 @@ import {ForgeX509Builder} from "../../services/trust-core/x509-forge.js";
 import {TrustCoreCertificateIssuer} from "../../services/trust-core/trust-core-certificate-issuer.js";
 import {PgCertificateStore} from "../../services/trust-core/pg-certificate-store.js";
 import {createPortalHandler} from "./portal-handler.js";
+import {PLANS, type TrialDays} from "./portal-pages.js";
 
 // vpn.bapc.app — the customer portal (see portal-handler.ts). Env:
 //   PORTAL_PUBLIC_ORIGIN  https://vpn.bapc.app
@@ -34,6 +35,7 @@ import {createPortalHandler} from "./portal-handler.js";
 const __dirname=dirname(fileURLToPath(import.meta.url));
 const JOIN_SCRIPT_PATH=join(__dirname,"..","..","..","installers","windows","join-vpn.ps1");
 const SYNC_INTERVAL_MS=15*60_000;
+const TRIAL_REFRESH_MS=10*60_000;
 
 await hydrateSecretsFromAws();
 const config=loadConfig();
@@ -68,10 +70,28 @@ const identity=env.BAPC_CLIENT_SECRET&&env.BAPC_CLIENT_SECRET.length>=32
 const billing=env.BAPC_BILLING_KEY&&env.BAPC_BILLING_KEY.length>=32
   ?new BapcBillingClient(env.BAPC_BILLING_URL??"https://billing.bapc.app",env.BAPC_BILLING_KEY):null;
 
+// Free trials: read from Billing's public plan list (no key needed) every 10 minutes, so the pages promise
+// exactly the trial Billing will give. If Billing can't be reached, the last answer stays (none at start).
+let trials:TrialDays={};
+const planList=new BapcBillingClient(env.BAPC_BILLING_URL??"https://billing.bapc.app","");
+const refreshTrials=async()=>{
+  try{
+    const days=await planList.trialDays();
+    const next:TrialDays={};
+    for(const p of PLANS){const d=days[p.id];if(d)next[p.id]=d;}
+    if(JSON.stringify(next)!==JSON.stringify(trials))console.log(JSON.stringify({event:"portal.trials",trials:next}));
+    trials=next;
+  }catch(error){
+    console.error(JSON.stringify({event:"portal.trials_check_failed",error:error instanceof Error?error.message:String(error)}));
+  }
+};
+await refreshTrials();
+const trialTimer=setInterval(()=>void refreshTrials(),TRIAL_REFRESH_MS);
+
 const joinScript=readFileSync(JOIN_SCRIPT_PATH,"utf8");
 const handler=createPortalHandler({
   origin:(env.PORTAL_PUBLIC_ORIGIN??"https://vpn.bapc.app").replace(/\/$/,""),
-  identity,billing,sessions:customers,devices,join:deviceJoin,joinScript:()=>joinScript
+  identity,billing,sessions:customers,devices,join:deviceJoin,joinScript:()=>joinScript,trials:()=>trials
 });
 
 // Billing is checked whenever a customer opens their account, and here on a
@@ -99,5 +119,5 @@ server.listen(port,host,()=>console.log(JSON.stringify({
   event:"ready",service:"bapc-vpn-portal",host,port,signIn:!!identity,billing:!!billing,gateway:!!config.vpnGateway
 })));
 
-const shutdown=()=>{clearInterval(timer);server.close(()=>void db.close().then(()=>process.exit(0)));setTimeout(()=>process.exit(1),10_000).unref();};
+const shutdown=()=>{clearInterval(timer);clearInterval(trialTimer);server.close(()=>void db.close().then(()=>process.exit(0)));setTimeout(()=>process.exit(1),10_000).unref();};
 process.on("SIGTERM",shutdown);process.on("SIGINT",shutdown);

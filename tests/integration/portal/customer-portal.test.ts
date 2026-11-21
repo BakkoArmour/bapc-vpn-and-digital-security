@@ -135,7 +135,7 @@ test("BapcBillingClient never mistakes an outage for an unpaid account",async()=
 
 // --- HTTP layer ---
 
-const startPortal=async(paid:{value:boolean})=>{
+const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>;status?:string;renews?:string}={})=>{
   const ctx=setup();
   const handler=createPortalHandler({
     origin:"http://portal.test",
@@ -146,9 +146,10 @@ const startPortal=async(paid:{value:boolean})=>{
     billing:{
       checkoutUrl:(plan,account)=>`https://billing.example/checkout?plan=${plan}&account=${account}`,
       manageUrl:()=>"https://billing.example/",
-      access:async():Promise<AccessState>=>({paid:paid.value,plan:paid.value?"monthly":null,status:paid.value?"active":"none",renewsOrEnds:null,cancelAtPeriodEnd:false})
+      access:async():Promise<AccessState>=>({paid:paid.value,plan:paid.value?"monthly":null,status:paid.value?(opts.status??"active"):"none",renewsOrEnds:opts.renews??null,cancelAtPeriodEnd:false})
     },
-    sessions:ctx.customers,devices:ctx.devices,join:ctx.join,joinScript:()=>"# script"
+    sessions:ctx.customers,devices:ctx.devices,join:ctx.join,joinScript:()=>"# script",
+    trials:()=>opts.trials??{}
   });
   const server:Server=createServer((q,s)=>void handler(q,s));
   await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
@@ -178,6 +179,52 @@ test("the public pages render with a strict content security policy and no accou
     const account=await fetch(`${base}/account`,{redirect:"manual"});
     assert.equal(account.status,303);
     assert.match(account.headers.get("location")!,/^\/auth\/start\?next=/);
+  }finally{server.close();}
+});
+
+test("BapcBillingClient reads free-trial days from Billing's public plan list, ignoring junk",async()=>{
+  let seen="";
+  const c=new BapcBillingClient("https://billing.example","",(async(u:URL,init?:RequestInit)=>{
+    seen=`${u} ${JSON.stringify(init?.headers??null)}`;
+    return Response.json({app:"bapc-vpn",plans:[{id:"monthly",trial_days:7},{id:"yearly",trial_days:0},{id:"odd",trial_days:"lots"},{id:"huge",trial_days:90}]});
+  }) as typeof fetch);
+  assert.deepEqual(await c.trialDays(),{monthly:7});
+  assert.equal(seen,"https://billing.example/api/v1/plans?app=bapc-vpn null"); // public: no key sent
+  const down=new BapcBillingClient("https://billing.example","",(async()=>new Response("x",{status:503})) as typeof fetch);
+  await assert.rejects(down.trialDays());
+});
+
+test("a free trial is advertised only when Billing gives one",async()=>{
+  const none=await startPortal({value:false});
+  try{
+    const html=await (await fetch(none.base)).text();
+    assert.doesNotMatch(html,/free trial/i);
+    assert.match(html,/Get BAPC VPN/);
+  }finally{none.server.close();}
+  const withTrial=await startPortal({value:false},{trials:{monthly:7,yearly:7}});
+  try{
+    const html=await (await fetch(withTrial.base)).text();
+    assert.match(html,/Try it free for 7 days/);
+    assert.match(html,/7-day free trial/);
+    assert.match(html,/Free for 7 days, then \$8\.99 a month/);
+    assert.match(html,/Free for 7 days, then \$35\.88 a year/);
+    assert.match(html,/nothing is charged until the trial ends/);
+    const terms=await (await fetch(`${withTrial.base}/terms`)).text();
+    assert.match(terms,/Free trial/);
+    const cookie=await signIn(withTrial.base);
+    const account=await (await fetch(`${withTrial.base}/account`,{headers:{cookie}})).text();
+    assert.match(account,/Start 7-day free trial/);
+    assert.match(account,/New customers only/);
+  }finally{withTrial.server.close();}
+});
+
+test("during a free trial the account page says when it ends and what it costs after",async()=>{
+  const {server,base}=await startPortal({value:true},{trials:{monthly:7},status:"trialing",renews:"2026-11-28T00:00:00Z"});
+  try{
+    const cookie=await signIn(base);
+    const html=await (await fetch(`${base}/account`,{headers:{cookie}})).text();
+    assert.match(html,/Your free trial is on/);
+    assert.match(html,/It ends November 28, 2026; after that your card is charged \$8\.99 a month unless you cancel/);
   }finally{server.close();}
 });
 

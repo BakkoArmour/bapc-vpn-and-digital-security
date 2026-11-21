@@ -62,6 +62,23 @@ export class BapcBillingClient {
 
   manageUrl():string{return new URL("/",this.baseUrl).toString();}
 
+  // Billing's public plan list (no key): which of our plans are on sale and the free-trial days each gives.
+  // Throws when Billing can't be reached, so the caller keeps what it last knew.
+  async trialDays():Promise<Record<string,number>>{
+    const u=new URL("/api/v1/plans",this.baseUrl);
+    u.searchParams.set("app",BILLING_APP_ID);
+    const r=await this.fetchImpl(u,{signal:AbortSignal.timeout(10_000)});
+    if(!r.ok)throw new Error(`BAPC Billing answered ${r.status}`);
+    const b=await r.json() as {plans?:{id?:unknown;trial_days?:unknown}[]};
+    if(!Array.isArray(b.plans))throw new Error("BAPC Billing gave an unexpected answer");
+    const out:Record<string,number>={};
+    for(const p of b.plans){
+      const days=Number(p.trial_days);
+      if(typeof p.id==="string"&&Number.isInteger(days)&&days>0&&days<=30)out[p.id]=days;
+    }
+    return out;
+  }
+
   // Throws when Billing can't be reached or refuses the app key, so callers
   // never mistake "couldn't check" for "hasn't paid" and switch a paying
   // customer's devices off because of an outage.

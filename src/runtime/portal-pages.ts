@@ -12,6 +12,13 @@ export const PLANS=[
 ] as const;
 export type PlanId=typeof PLANS[number]["id"];
 export const isPlanId=(p:unknown):p is PlanId=>PLANS.some(x=>x.id===p);
+// Free-trial days per plan, as BAPC Billing reports them right now (its public plan list). The pages only
+// promise a trial Billing will actually give, so a plan with no entry here shows no trial.
+export type TrialDays=Partial<Record<PlanId,number>>;
+// What a plan registers with Billing (scripts/register-billing-plans.mjs): one source for ids, prices and trial.
+export const PLAN_TRIAL_DAYS=7;
+const trialOf=(t:TrialDays,id:PlanId)=>Math.max(0,Math.floor(t[id]??0));
+const longestTrial=(t:TrialDays)=>Math.max(0,...PLANS.map(p=>trialOf(t,p.id)));
 
 export const esc=(s:unknown)=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
 
@@ -57,40 +64,49 @@ export const layout=(title:string,body:string,opts:{signedIn?:boolean}={})=>`<!d
 <footer>&copy; ${new Date().getUTCFullYear()} Bakko Armour LLC &middot; <a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="mailto:bakkoarmour@gmail.com">Contact</a></footer>
 </body></html>`;
 
-const planCards=(cta:(planId:PlanId)=>string)=>PLANS.map(p=>`
-<div class="card plan${p.id==="yearly"?" best":""}">${p.id==="yearly"?`<div class="tag">Best value</div>`:""}
+const planCards=(cta:(planId:PlanId,trial:number)=>string,trials:TrialDays={})=>PLANS.map(p=>{
+  const trial=trialOf(trials,p.id);
+  return `
+<div class="card plan${p.id==="yearly"?" best":""}">${p.id==="yearly"?`<div class="tag">Best value</div> `:""}${trial?`<div class="tag">${trial}-day free trial</div>`:""}
 <h3>${p.name}</h3><div class="price">${p.per} <small>${p.perLabel}</small></div>
-<p style="margin:8px 0 16px">${p.note}. Up to ${DEVICE_LIMIT} devices.</p>${cta(p.id)}</div>`).join("");
+<p style="margin:8px 0 16px">${trial?`Free for ${trial} days, then ${p.id==="yearly"?"$35.88 a year":"$8.99 a month"}. `:""}${p.note}. Up to ${DEVICE_LIMIT} devices.</p>${cta(p.id,trial)}</div>`;
+}).join("");
 
-export const landingPage=(signedIn:boolean)=>layout("BAPC VPN: private internet for every device",`
+export const landingPage=(signedIn:boolean,trials:TrialDays={})=>{
+  const trial=longestTrial(trials);
+  return layout("BAPC VPN: private internet for every device",`
 <div class="hero"><h1>Private internet for every device you own.</h1>
-<p>BAPC VPN encrypts everything your devices send and hides your home address from the sites you visit. Windows, Mac, iPhone and Android, up to ${DEVICE_LIMIT} devices, from $2.99 a month.</p>
-<a class="button primary" href="/account">Get BAPC VPN</a> <a class="button" href="#pricing">See pricing</a></div>
+<p>BAPC VPN encrypts everything your devices send and hides your home address from the sites you visit. Windows, Mac, iPhone and Android, up to ${DEVICE_LIMIT} devices, from $2.99 a month.${trial?` Try it free for ${trial} days.`:""}</p>
+<a class="button primary" href="/account">${trial?`Start your free trial`:"Get BAPC VPN"}</a> <a class="button" href="#pricing">See pricing</a></div>
 <section><div class="grid">
 <div class="card"><h3>Modern encryption</h3><p>Built on WireGuard, the fast, modern VPN protocol built into Linux and used by security teams.</p></div>
 <div class="card"><h3>No activity logs</h3><p>We don't record the sites you visit, your DNS lookups or what you send. <a href="/privacy">Read exactly what we keep.</a></p></div>
 <div class="card"><h3>All your devices</h3><p>Windows, Mac, iPhone, iPad, Android and Linux. Add or remove devices yourself, anytime.</p></div>
 <div class="card"><h3>You stay in control</h3><p>Every device has its own key. Switch any device off for good from your account in one click.</p></div>
 </div></section>
-<section id="pricing"><h2>Simple pricing</h2><div class="grid">${planCards(id=>`<a class="button primary" href="/account?plan=${id}">Choose ${id==="yearly"?"yearly":"monthly"}</a>`)}</div>
-<p class="muted" style="margin-top:14px">Payments are handled securely by BAPC Billing with Stripe. Cancel anytime; your plan stays on until the end of the period you paid for.</p></section>
+<section id="pricing"><h2>Simple pricing</h2><div class="grid">${planCards((id,t)=>`<a class="button primary" href="/account?plan=${id}">${t?`Start free, then ${id==="yearly"?"yearly":"monthly"}`:`Choose ${id==="yearly"?"yearly":"monthly"}`}</a>`,trials)}</div>
+<p class="muted" style="margin-top:14px">Payments are handled securely by BAPC Billing with Stripe.${trial?` The free trial is for new customers: you add a card, nothing is charged until the trial ends, and you can cancel before then to pay nothing. We email you 3 days before it ends.`:""} Cancel anytime; your plan stays on until the end of the period you paid for.</p></section>
 <section><h2>Good to know</h2><div class="grid">
 <div class="card"><h3>Where your traffic exits</h3><p>BAPC VPN launches with servers in Germany. More locations are on the way.</p></div>
 <div class="card"><h3>One BAPC account</h3><p>Sign in with the same BAPC account you use for other BAPC apps, or create one in a minute.</p></div>
 <div class="card"><h3>Set up in minutes</h3><p>Windows: one copy-paste command. Phones and Macs: scan a code with the free WireGuard app.</p></div>
 </div></section>`,{signedIn});
+};
 
 export const accountPage=(v:{
   email:string;csrf:string;access:AccessState|null;devices:CustomerDevice[];wantPlan:PlanId|null;
-  checkoutUrl:(plan:PlanId)=>string;manageUrl:string;msg?:string|undefined
+  checkoutUrl:(plan:PlanId)=>string;manageUrl:string;msg?:string|undefined;trials?:TrialDays
 })=>{
   const paid=v.access?.paid===true;
+  const onDate=(iso:string)=>esc(new Date(iso).toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric",timeZone:"UTC"}));
   const status=v.access===null
     ?`<div class="notice">We couldn't check your plan with BAPC Billing just now. Your devices keep working; try this page again in a minute.</div>`
+    :paid&&v.access.status==="trialing"
+      ?`<p><span class="status on">Your free trial is on</span> (${esc(v.access.plan==="yearly"?"Yearly":"Monthly")})${v.access.renewsOrEnds?`. ${v.access.cancelAtPeriodEnd?`It ends ${onDate(v.access.renewsOrEnds)} and you won't be charged`:`It ends ${onDate(v.access.renewsOrEnds)}; after that your card is charged ${v.access.plan==="yearly"?"$35.88 a year":"$8.99 a month"} unless you cancel`}`:""}. <a href="${esc(v.manageUrl)}">Manage or cancel</a></p>`
     :paid
-      ?`<p><span class="status on">Your plan is active</span> (${esc(v.access.plan==="yearly"?"Yearly":"Monthly")})${v.access.renewsOrEnds?`, ${v.access.cancelAtPeriodEnd?"ends":"renews"} ${esc(new Date(v.access.renewsOrEnds).toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric",timeZone:"UTC"}))}`:""}. <a href="${esc(v.manageUrl)}">Manage or cancel</a></p>`
+      ?`<p><span class="status on">Your plan is active</span> (${esc(v.access.plan==="yearly"?"Yearly":"Monthly")})${v.access.renewsOrEnds?`, ${v.access.cancelAtPeriodEnd?"ends":"renews"} ${onDate(v.access.renewsOrEnds)}`:""}. <a href="${esc(v.manageUrl)}">Manage or cancel</a></p>`
       :`<p><span class="status off">No active plan.</span> Pick one to start using BAPC VPN${v.devices.length?"; your devices switch back on as soon as you pay":""}.</p>
-<div class="grid" style="margin-top:12px">${planCards(id=>`<a class="button${id===(v.wantPlan??"yearly")?" primary":""}" href="${esc(v.checkoutUrl(id))}">Pay ${id==="yearly"?"yearly":"monthly"}</a>`)}</div>`;
+<div class="grid" style="margin-top:12px">${planCards((id,t)=>`<a class="button${id===(v.wantPlan??"yearly")?" primary":""}" href="${esc(v.checkoutUrl(id))}">${t?`Start ${t}-day free trial`:`Pay ${id==="yearly"?"yearly":"monthly"}`}</a>`,v.trials??{})}</div>${longestTrial(v.trials??{})?`<p class="muted">New customers only. Nothing is charged until the trial ends; cancel before then to pay nothing.</p>`:""}`;
   const rows=v.devices.map(d=>`<tr><td>${esc(d.name)}<div class="muted" style="font-size:13px">${esc(DEVICE_KINDS[d.kind as DeviceKind]??d.kind)} &middot; ${esc(d.address)}</div></td>
 <td>${d.suspended?`<span class="status off">Paused</span>`:`<span class="status on">On</span>`}</td>
 <td style="text-align:right"><form class="inline" method="post" action="/account/devices/${esc(d.nodeId)}/remove"><input type="hidden" name="csrf" value="${esc(v.csrf)}"><button class="button danger" type="submit">Remove</button></form></td></tr>`).join("");
@@ -157,8 +173,9 @@ export const privacyPage=(signedIn:boolean)=>layout("Privacy at BAPC VPN",`<div 
 <h2>Contact</h2><p><a href="mailto:bakkoarmour@gmail.com">bakkoarmour@gmail.com</a></p></div>`,{signedIn});
 
 export const termsPage=(signedIn:boolean)=>layout("BAPC VPN terms",`<div class="legal">
-<h1 style="margin-top:24px">Terms of service</h1><p class="muted">Last updated October 16, 2026. These terms are between you and Bakko Armour LLC, USA.</p>
+<h1 style="margin-top:24px">Terms of service</h1><p class="muted">Last updated November 21, 2026. These terms are between you and Bakko Armour LLC, USA.</p>
 <h2>Your plan</h2><p>BAPC VPN is sold as a monthly ($8.99) or yearly ($35.88) subscription through BAPC Billing, for up to ${DEVICE_LIMIT} devices. It renews automatically until you cancel. You can cancel anytime from BAPC Billing; your plan stays on until the end of the period you've paid for. If a payment fails, your devices pause until it's paid.</p>
+<h2>Free trial</h2><p>When a plan includes a free trial, it's for new customers only (one per BAPC account). You add a card at the start, but nothing is charged until the trial ends; we email you 3 days before. Cancel before the trial ends and you pay nothing. If you don't cancel, the plan starts at its normal price on the day the trial ends.</p>
 <h2>Fair and lawful use</h2><p>Don't use BAPC VPN to break the law, to attack, scan or spam other systems, to distribute malware, or to infringe others' rights. We may pause or close accounts that do, and we'll cooperate with valid legal requests within the limits of the little data we hold (see <a href="/privacy">Privacy</a>).</p>
 <h2>Service</h2><p>We work to keep BAPC VPN fast and available, but we can't promise it will never be interrupted. The service is provided "as is", to the extent the law allows.</p>
 <h2>Changes</h2><p>If we change these terms or prices, we'll tell you by email before the change affects you.</p>
