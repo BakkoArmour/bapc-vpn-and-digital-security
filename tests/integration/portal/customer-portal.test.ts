@@ -14,6 +14,7 @@ import {AccountAttestedVerifier} from "../../../src/infrastructure/attestation/a
 import {BapcBillingClient, type AccessState} from "../../../src/infrastructure/bapc-accounts.js";
 import {createPortalHandler, type PortalSessionStore} from "../../../src/runtime/portal-handler.js";
 import {AuthorizationError} from "../../../src/domain/errors.js";
+import type {AccountDataStore, AccountExport} from "../../../src/application/account-data.js";
 
 // The customer portal end to end against in-memory stores: account-attested
 // app devices, account-bound Windows invites redeemed through the real TPM
@@ -45,6 +46,27 @@ class MemoryCustomers implements CustomerStore, PortalSessionStore {
   async createSession(tokenHash:string,s:Omit<CustomerSession,"tokenHash">){this.sessionsByHash.set(tokenHash,{tokenHash,...s});}
   async session(tokenHash:string){return this.sessionsByHash.get(tokenHash)??null;}
   async deleteSession(tokenHash:string){this.sessionsByHash.delete(tokenHash);}
+}
+
+class MemoryAccountData implements AccountDataStore {
+  log:{accountId:string;actor:"customer"|"system";action:string;detail:Record<string,unknown>;ip:string|null;at:Date}[]=[];
+  constructor(private customers:MemoryCustomers){}
+  async audit(accountId:string,actor:"customer"|"system",action:string,detail:Record<string,unknown>={},ip:string|null=null){this.log.push({accountId,actor,action,detail,ip,at:new Date()});}
+  async exportAccount(accountId:string):Promise<AccountExport>{
+    return {
+      devices:[...this.customers.rows.values()].filter(r=>r.account.accountId===accountId)
+        .map(r=>({name:r.account.deviceName,kind:r.kind,address:"",createdAt:r.createdAt,suspended:r.suspended,removedAt:r.removed?new Date():null,lastHandshake:null})),
+      invites:[],
+      activity:this.log.filter(e=>e.accountId===accountId).map(({accountId:_a,...e})=>e)
+    };
+  }
+  async eraseAccount(accountId:string){
+    let devices=0,sessions=0,auditRows=0;
+    for(const r of this.customers.rows.values())if(r.account.accountId===accountId){r.account={accountId:"erased",email:"",deviceName:"Removed device"};r.removed=true;devices++;}
+    for(const [h,s] of this.customers.sessionsByHash)if(s.accountId===accountId){this.customers.sessionsByHash.delete(h);sessions++;}
+    for(const e of this.log)if(e.accountId===accountId){e.accountId="erased";e.detail={};e.ip=null;auditRows++;}
+    return {devices,invites:0,sessions,auditRows};
+  }
 }
 
 const SECRET="x".repeat(40);
@@ -135,8 +157,9 @@ test("BapcBillingClient never mistakes an outage for an unpaid account",async()=
 
 // --- HTTP layer ---
 
-const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>;status?:string;renews?:string}={})=>{
+const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>;status?:string;renews?:string;cancelAtPeriodEnd?:boolean;billingDown?:{value:boolean}}={})=>{
   const ctx=setup();
+  const accountData=new MemoryAccountData(ctx.customers);
   const handler=createPortalHandler({
     origin:"http://portal.test",
     identity:{
@@ -146,15 +169,18 @@ const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>
     billing:{
       checkoutUrl:(plan,account)=>`https://billing.example/checkout?plan=${plan}&account=${account}`,
       manageUrl:()=>"https://billing.example/",
-      access:async():Promise<AccessState>=>({paid:paid.value,plan:paid.value?"monthly":null,status:paid.value?(opts.status??"active"):"none",renewsOrEnds:opts.renews??null,cancelAtPeriodEnd:false})
+      access:async():Promise<AccessState>=>{
+        if(opts.billingDown?.value)throw new Error("BAPC Billing answered 502");
+        return {paid:paid.value,plan:paid.value?"monthly":null,status:paid.value?(opts.status??"active"):"none",renewsOrEnds:opts.renews??null,cancelAtPeriodEnd:opts.cancelAtPeriodEnd??false};
+      }
     },
     sessions:ctx.customers,devices:ctx.devices,join:ctx.join,joinScript:()=>"# script",
-    trials:()=>opts.trials??{}
+    trials:()=>opts.trials??{},accountData
   });
   const server:Server=createServer((q,s)=>void handler(q,s));
   await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
   const base=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return {...ctx,server,base};
+  return {...ctx,server,base,accountData};
 };
 
 const signIn=async(base:string)=>{
@@ -279,5 +305,115 @@ test("the join API answers the Windows installer in JSON, including refusals",as
     const r=await fetch(`${base}/api/v1/devices/join`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(deviceRequest("BAPC-000000-000000-000000-000000"))});
     assert.equal(r.status,403);
     assert.match((await r.json() as {error:{message:string}}).error.message,/invite code is not valid/);
+  }finally{server.close();}
+});
+
+// --- audit trail, data export, account closure (Enterprise Standard: audit log; GDPR/CCPA export and delete) ---
+
+const formPost=(base:string,cookie:string,path:string,body:Record<string,string>)=>
+  fetch(`${base}${path}`,{method:"POST",redirect:"manual",headers:{cookie,"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams(body)});
+
+test("sign-in, adding and removing a device and sign-out are all in the audit trail, with who, what and when",async()=>{
+  const {server,base,customers,accountData}=await startPortal({value:true});
+  try{
+    const cookie=await signIn(base);
+    const csrf=[...customers.sessionsByHash.values()][0]!.csrfToken;
+    await formPost(base,cookie,"/account/devices",{csrf,kind:"android",name:"Pixel"});
+    const nodeId=[...customers.rows.keys()][0]!;
+    await formPost(base,cookie,`/account/devices/${nodeId}/remove`,{csrf});
+    await formPost(base,cookie,"/auth/logout",{});
+    const actions=accountData.log.map(e=>`${e.actor}:${e.action}`);
+    assert.deepEqual(actions,["customer:auth.signed_in","customer:device.added","customer:device.removed","customer:auth.signed_out"]);
+    assert.ok(accountData.log.every(e=>e.accountId===ACCOUNT.accountId&&e.at instanceof Date&&e.ip));
+    assert.equal(accountData.log[1]!.detail.kind,"android");
+  }finally{server.close();}
+});
+
+test("a lapsed payment is audited as a system action when devices pause",async()=>{
+  const paid={value:true};
+  const {server,base,customers,accountData}=await startPortal(paid);
+  try{
+    const cookie=await signIn(base);
+    const csrf=[...customers.sessionsByHash.values()][0]!.csrfToken;
+    await formPost(base,cookie,"/account/devices",{csrf,kind:"iphone"});
+    paid.value=false;
+    await fetch(`${base}/account`,{headers:{cookie}});
+    const pause=accountData.log.find(e=>e.action==="payment.devices_paused");
+    assert.equal(pause?.actor,"system");assert.equal(pause?.detail.devices,1);
+  }finally{server.close();}
+});
+
+test("Download my data returns everything held about the account as a JSON file, and never a private key",async()=>{
+  const {server,base,customers}=await startPortal({value:true});
+  try{
+    const cookie=await signIn(base);
+    const csrf=[...customers.sessionsByHash.values()][0]!.csrfToken;
+    const setup=await (await formPost(base,cookie,"/account/devices",{csrf,kind:"mac",name:"Work Mac"})).text();
+    const config=Buffer.from(setup.match(/data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)/)?.[1]??"","base64").toString("utf8");
+    const privateKey=config.match(/PrivateKey = ([A-Za-z0-9+/=]{44})/)?.[1];
+    assert.ok(privateKey,"setup page shows the key once");
+    const account=await (await fetch(`${base}/account`,{headers:{cookie}})).text();
+    assert.match(account,/Download my data/);assert.match(account,/Close my account/);
+    const r=await fetch(`${base}/account/export`,{headers:{cookie}});
+    assert.equal(r.status,200);
+    assert.match(r.headers.get("content-disposition")!,/attachment; filename="bapc-vpn-data-\d{4}-\d{2}-\d{2}\.json"/);
+    const text=await r.text();
+    const data=JSON.parse(text) as {account:{email:string};devices:{name:string;kind:string}[];activity:{action:string}[];plan:{paid:boolean};not_included:Record<string,string>};
+    assert.equal(data.account.email,"pat@example.com");
+    assert.deepEqual(data.devices.map(d=>[d.name,d.kind]),[["Work Mac","mac"]]);
+    assert.ok(data.activity.some(a=>a.action==="device.added"));
+    assert.equal(data.plan.paid,true);
+    assert.ok(data.not_included.device_private_keys);
+    assert.ok(!text.includes(privateKey!),"the export never contains a device private key");
+    assert.equal((await fetch(`${base}/account/export`,{redirect:"manual"})).status,303,"signed-out export goes to sign-in");
+  }finally{server.close();}
+});
+
+test("closing the account needs DELETE typed, a cancelled plan and a reachable Billing; then devices are revoked and data erased",async()=>{
+  const paid={value:true},billingDown={value:false};
+  const {server,base,customers,accountData,repo}=await startPortal(paid,{billingDown});
+  try{
+    const cookie=await signIn(base);
+    const csrf=[...customers.sessionsByHash.values()][0]!.csrfToken;
+    await formPost(base,cookie,"/account/devices",{csrf,kind:"android",name:"Phone"});
+    const nodeId=[...customers.rows.keys()][0]!;
+    const noCsrf=await formPost(base,cookie,"/account/delete",{confirm:"DELETE"});
+    assert.equal(noCsrf.status,403);
+    const noWord=await formPost(base,cookie,"/account/delete",{csrf,confirm:"delete please"});
+    assert.match(decodeURIComponent(noWord.headers.get("location")!),/type DELETE/);
+    const stillPaying=await formPost(base,cookie,"/account/delete",{csrf,confirm:"DELETE"});
+    assert.match(decodeURIComponent(stillPaying.headers.get("location")!),/Cancel your plan in BAPC Billing first/);
+    billingDown.value=true;
+    const down=await formPost(base,cookie,"/account/delete",{csrf,confirm:"DELETE"});
+    assert.match(decodeURIComponent(down.headers.get("location")!),/nothing was deleted/);
+    assert.equal(customers.rows.get(nodeId)!.removed,false,"nothing happened before the checks passed");
+    billingDown.value=false;paid.value=false;
+    const done=await formPost(base,cookie,"/account/delete",{csrf,confirm:"DELETE"});
+    assert.equal(done.status,200);
+    assert.match(await done.text(),/Your BAPC VPN account is closed/);
+    assert.match(done.headers.get("set-cookie")!,/Max-Age=0/);
+    const node=repo.nodes.get(nodeId)!;
+    assert.equal((await repo.get(node.deviceId))!.revoked,true,"the device can never connect again");
+    const row=customers.rows.get(nodeId)!;
+    assert.equal(row.account.email,"");assert.notEqual(row.account.accountId,ACCOUNT.accountId);
+    assert.equal(customers.sessionsByHash.size,0,"signed out everywhere");
+    assert.ok(accountData.log.every(e=>e.accountId!==ACCOUNT.accountId&&e.ip===null),"audit rows no longer identify the person");
+    assert.ok(accountData.log.some(e=>e.action==="account.closed"));
+    assert.equal((await fetch(`${base}/account`,{headers:{cookie},redirect:"manual"})).status,303,"the old cookie no longer works");
+  }finally{server.close();}
+});
+
+test("help, privacy and terms point to BAPC Support, explain the one cookie, and never show a personal address",async()=>{
+  const {server,base}=await startPortal({value:false});
+  try{
+    for(const p of ["/","/help","/privacy","/terms"]){
+      const html=await (await fetch(base+p)).text();
+      assert.match(html,/support\.bapc\.app/,p);
+      assert.match(html,/one sign-in cookie/,p);
+      assert.doesNotMatch(html,/gmail\.com/,p);
+    }
+    const help=await (await fetch(`${base}/help`)).text();
+    assert.match(help,/It isn't connecting/);assert.match(help,/support@bapc\.app/);
+    assert.match(await (await fetch(`${base}/privacy`)).text(),/bapc_vpn_session/);
   }finally{server.close();}
 });

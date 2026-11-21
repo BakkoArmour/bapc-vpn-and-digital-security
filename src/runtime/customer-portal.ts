@@ -13,6 +13,7 @@ import {buildAttestationVerifier} from "../infrastructure/attestation/attestatio
 import {AccountAttestedVerifier} from "../infrastructure/attestation/account-attested.js";
 import {PgEnrollmentInviteStore} from "../infrastructure/pg-enrollment-invites.js";
 import {PgCustomerStore} from "../infrastructure/pg-customer-store.js";
+import {PgAccountData} from "../infrastructure/pg-account-data.js";
 import {BapcBillingClient, BapcIdentityClient} from "../infrastructure/bapc-accounts.js";
 import {EnrollmentService} from "../application/enrollment.js";
 import {DeviceJoinService} from "../application/device-join.js";
@@ -50,6 +51,7 @@ const certificateIssuer=new TrustCoreCertificateIssuer(new TrustCoreIssuer(
   {id:trustAnchor.issuerId,certificatePem:trustAnchor.certificatePem,keyReference:trustAnchor.keyReference,algorithm:trustAnchor.algorithm}
 ));
 const customers=new PgCustomerStore(db);
+const accountData=new PgAccountData(db);
 const invites=new PgEnrollmentInviteStore(db);
 // Derived, not a new secret to manage: only this process ever computes it.
 const accountAttestation=new AccountAttestedVerifier(
@@ -91,7 +93,7 @@ const trialTimer=setInterval(()=>void refreshTrials(),TRIAL_REFRESH_MS);
 const joinScript=readFileSync(JOIN_SCRIPT_PATH,"utf8");
 const handler=createPortalHandler({
   origin:(env.PORTAL_PUBLIC_ORIGIN??"https://vpn.bapc.app").replace(/\/$/,""),
-  identity,billing,sessions:customers,devices,join:deviceJoin,joinScript:()=>joinScript,trials:()=>trials
+  identity,billing,sessions:customers,devices,join:deviceJoin,joinScript:()=>joinScript,trials:()=>trials,accountData
 });
 
 // Billing is checked whenever a customer opens their account, and here on a
@@ -104,7 +106,11 @@ const syncPayments=async()=>{
     try{
       const access=await billing.access(accountId);
       const changed=await devices.applyPaymentState(accountId,access.paid);
-      if(changed)console.log(JSON.stringify({event:"portal.payment_state",accountId,paid:access.paid,devices:changed}));
+      if(changed){
+        console.log(JSON.stringify({event:"portal.payment_state",accountId,paid:access.paid,devices:changed}));
+        await accountData.audit(accountId,"system",access.paid?"payment.devices_resumed":"payment.devices_paused",{devices:changed,status:access.status})
+          .catch(error=>console.error(JSON.stringify({event:"portal.audit_failed",error:error instanceof Error?error.message:String(error)})));
+      }
     }catch(error){
       console.error(JSON.stringify({event:"portal.payment_check_failed",accountId,error:error instanceof Error?error.message:String(error)}));
     }

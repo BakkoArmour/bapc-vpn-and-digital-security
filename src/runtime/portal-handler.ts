@@ -7,8 +7,9 @@ import {MemoryRateLimiter, type RateLimitRule} from "../api/rest/rate-limit.js";
 import {isDeviceKind, type CustomerDeviceService, type CustomerSession} from "../application/customer-devices.js";
 import type {DeviceJoinService} from "../application/device-join.js";
 import {randomToken, sha256Hex, type AccessState, type BapcUser} from "../infrastructure/bapc-accounts.js";
+import type {AccountDataStore} from "../application/account-data.js";
 import {
-  accountPage, appDevicePage, isPlanId, landingPage, messagePage, privacyPage, termsPage, windowsInvitePage, type TrialDays
+  accountPage, appDevicePage, helpPage, isPlanId, landingPage, messagePage, privacyPage, termsPage, windowsInvitePage, type TrialDays
 } from "./portal-pages.js";
 
 // The customer-facing site (vpn.bapc.app): marketing + pricing, Sign in
@@ -30,11 +31,13 @@ export interface PortalDeps {
   identity:{authorizeUrl(redirectUri:string,state:string,verifier:string):string;exchange(code:string,redirectUri:string,verifier:string):Promise<BapcUser|null>}|null;
   billing:{checkoutUrl(planId:string,accountId:string):string;manageUrl():string;access(accountId:string):Promise<AccessState>}|null;
   sessions:PortalSessionStore;
-  devices:Pick<CustomerDeviceService,"list"|"addWindowsDevice"|"addAppDevice"|"removeDevice"|"applyPaymentState">;
+  devices:Pick<CustomerDeviceService,"list"|"addWindowsDevice"|"addAppDevice"|"removeDevice"|"applyPaymentState"|"revokeAll">;
   join:Pick<DeviceJoinService,"join">;
   joinScript:()=>string;
   // Free-trial days Billing currently gives per plan (cached by the caller); empty = no trial advertised.
   trials?:()=>TrialDays;
+  // Audit trail, data export and erasure (db/022). Required in production (customer-portal.ts always passes it).
+  accountData:AccountDataStore;
 }
 
 const COOKIE="bapc_vpn_session";
@@ -42,8 +45,10 @@ const SESSION_HOURS=12;
 const CSP="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const LIMITS:Record<string,RateLimitRule>={
   join:{limit:10,windowMs:60_000},auth:{limit:30,windowMs:60_000},
-  addDevice:{limit:10,windowMs:3_600_000},page:{limit:240,windowMs:60_000}
+  addDevice:{limit:10,windowMs:3_600_000},page:{limit:240,windowMs:60_000},
+  export:{limit:10,windowMs:3_600_000},closeAccount:{limit:5,windowMs:3_600_000}
 };
+export const DELETE_CONFIRMATION="DELETE";
 
 const safeNext=(n:string|null|undefined)=>n&&/^\/[A-Za-z0-9/?=&_.-]*$/.test(n)&&!n.startsWith("//")?n:"/account";
 const sameToken=(a:string,b:string)=>{const x=Buffer.from(a),y=Buffer.from(b);return x.length===y.length&&timingSafeEqual(x,y);};
@@ -83,11 +88,18 @@ export const createPortalHandler=(deps:PortalDeps)=>{
     return m?deps.sessions.session(sha256Hex(m[1]!)):null;
   };
 
+  // The audit trail must never take a customer's action down with it: a failed write is logged, not thrown.
+  const audit=async(accountId:string,action:string,detail:Record<string,unknown>={},ip:string|null=null,actor:"customer"|"system"="customer")=>{
+    try{await deps.accountData.audit(accountId,actor,action,detail,ip);}
+    catch(error){console.error(JSON.stringify({event:"portal.audit_failed",action,error:error instanceof Error?error.message:String(error)}));}
+  };
+
   const checkAccess=async(accountId:string)=>{
     if(!deps.billing)return null;
     try{
       const access=await deps.billing.access(accountId);
-      await deps.devices.applyPaymentState(accountId,access.paid);
+      const changed=await deps.devices.applyPaymentState(accountId,access.paid);
+      if(changed)await audit(accountId,access.paid?"payment.devices_resumed":"payment.devices_paused",{devices:changed,status:access.status},null,"system");
       return access;
     }catch{return null;}
   };
@@ -141,12 +153,14 @@ export const createPortalHandler=(deps:PortalDeps)=>{
       const token=randomToken();
       await deps.sessions.createSession(sha256Hex(token),{accountId:user.id,email:user.email.toLowerCase(),name:user.name||null,csrfToken:randomToken()},
         new Date(Date.now()+SESSION_HOURS*3_600_000));
+      await audit(user.id,"auth.signed_in",{},ip);
       redirect(res,pending.nextPath,[cookie(token,SESSION_HOURS*3600)]);
       return;
     }
     if(method==="POST"&&path==="/auth/logout"){
       const m=String(req.headers.cookie??"").match(new RegExp(`(?:^|;\\s*)${COOKIE}=([A-Za-z0-9_-]+)`));
       if(m)await deps.sessions.deleteSession(sha256Hex(m[1]!));
+      if(s)await audit(s.accountId,"auth.signed_out",{},ip);
       redirect(res,"/",[cookie("",0)]);
       return;
     }
@@ -169,6 +183,28 @@ export const createPortalHandler=(deps:PortalDeps)=>{
         }));
         return;
       }
+      // Everything the portal holds about this account, as a file (GDPR/CCPA access and portability).
+      if(method==="GET"&&path==="/account/export"){
+        limit("export");
+        const data=await deps.accountData.exportAccount(s.accountId);
+        const access=await checkAccess(s.accountId);
+        await audit(s.accountId,"account.exported",{},ip);
+        const body={
+          exported_at:new Date().toISOString(),service:"BAPC VPN (vpn.bapc.app)",
+          account:{bapc_account_id:s.accountId,email:s.email,name:s.name},
+          plan:access?{paid:access.paid,plan:access.plan,status:access.status,renews_or_ends:access.renewsOrEnds,cancel_at_period_end:access.cancelAtPeriodEnd}:"BAPC Billing could not be reached; see https://billing.bapc.app",
+          devices:data.devices,device_invites:data.invites,activity:data.activity,
+          not_included:{
+            payments_and_invoices:"held by BAPC Billing: https://billing.bapc.app",
+            sign_in_account:"held by bapc.app: https://bapc.app/account",
+            device_private_keys:"never stored: each device's private key was shown to you once and only lives on that device",
+            browsing_activity:"never recorded: BAPC VPN keeps no logs of sites visited, DNS lookups or traffic content"
+          }
+        };
+        send(res,200,JSON.stringify(body,null,2),"application/json; charset=utf-8",
+          {"content-disposition":`attachment; filename="bapc-vpn-data-${new Date().toISOString().slice(0,10)}.json"`});
+        return;
+      }
       if(method!=="POST")throw Object.assign(new Error("not found"),{status:404});
       const form=new URLSearchParams(await readBody(req,8_000));
       if(!sameToken(form.get("csrf")??"",s.csrfToken))throw Object.assign(new Error("This form expired. Go back, reload the page and try again."),{status:403});
@@ -182,10 +218,12 @@ export const createPortalHandler=(deps:PortalDeps)=>{
         const account={accountId:s.accountId,email:s.email};
         if(kind==="windows"){
           const invite=await deps.devices.addWindowsDevice(account,form.get("name"));
+          await audit(s.accountId,"device.windows_invite_created",{expires_at:invite.expiresAt},ip);
           send(res,200,windowsInvitePage({origin:deps.origin,code:invite.code,expiresAt:invite.expiresAt,name:form.get("name")?.trim()||"Windows PC"}));
           return;
         }
         const added=await deps.devices.addAppDevice(account,kind,form.get("name"));
+        await audit(s.accountId,"device.added",{node_id:added.nodeId,kind,name:added.name},ip);
         const qrSvg=new QRCode({content:added.config,padding:2,ecl:"M",join:true,container:"svg-viewbox"}).svg();
         send(res,200,appDevicePage({kind,name:added.name,config:added.config,qrSvg}));
         return;
@@ -193,10 +231,33 @@ export const createPortalHandler=(deps:PortalDeps)=>{
       const remove=path.match(/^\/account\/devices\/([0-9a-f-]{36})\/remove$/);
       if(remove){
         await deps.devices.removeDevice(s.accountId,remove[1]!);
+        await audit(s.accountId,"device.removed",{node_id:remove[1]},ip);
         redirect(res,`/account?msg=${encodeURIComponent("Device removed. It can't connect any more.")}`);
         return;
       }
+      // Close the account (GDPR/CCPA erasure). A plan that would still renew must be cancelled in Billing first,
+      // so nobody is charged for an account that no longer exists; if Billing can't be reached, nothing is deleted.
+      if(path==="/account/delete"){
+        limit("closeAccount");
+        if((form.get("confirm")??"").trim()!==DELETE_CONFIRMATION){
+          redirect(res,`/account?msg=${encodeURIComponent(`To close your account, type ${DELETE_CONFIRMATION} in the box.`)}#your-data`);return;
+        }
+        const access=deps.billing?await checkAccess(s.accountId):{paid:false,cancelAtPeriodEnd:false} as Pick<AccessState,"paid"|"cancelAtPeriodEnd">;
+        if(access===null){redirect(res,`/account?msg=${encodeURIComponent("We couldn't check your plan with BAPC Billing just now, so nothing was deleted. Try again in a minute.")}#your-data`);return;}
+        if(access.paid&&!access.cancelAtPeriodEnd){
+          redirect(res,`/account?msg=${encodeURIComponent("Cancel your plan in BAPC Billing first (Manage or cancel), then close your account. Nothing was deleted.")}#your-data`);return;
+        }
+        const revoked=await deps.devices.revokeAll(s.accountId);
+        await audit(s.accountId,"account.closed",{devices_revoked:revoked},ip);
+        const erased=await deps.accountData.eraseAccount(s.accountId);
+        console.log(JSON.stringify({event:"portal.account_closed",devicesRevoked:revoked,...erased}));
+        send(res,200,messagePage("Your BAPC VPN account is closed",
+          `Your ${revoked===1?"device was":`${revoked} devices were`} switched off for good and your BAPC VPN data was deleted. Your sign-in account at bapc.app and your payment records at BAPC Billing are separate; manage or delete those at bapc.app/account and billing.bapc.app.`),
+          "text/html; charset=utf-8",{"set-cookie":cookie("",0)});
+        return;
+      }
     }
+    if(method==="GET"&&path==="/help"){send(res,200,helpPage(!!s));return;}
     throw Object.assign(new Error("Page not found"),{status:404});
   };
 

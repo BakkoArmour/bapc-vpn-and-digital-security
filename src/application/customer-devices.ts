@@ -122,6 +122,14 @@ export class CustomerDeviceService {
     if(device)await this.deviceRepo.save({...device,revoked:true,updatedAt:this.clock.now()});
   }
 
+  // Closing the account: every device is revoked (so no saved config can
+  // connect again) before the account's data is erased (AccountDataStore).
+  async revokeAll(accountId:string){
+    const devices=await this.store.devices(accountId);
+    for(const d of devices)await this.removeDevice(accountId,d.nodeId);
+    return devices.length;
+  }
+
   // Billing is the source of truth for "has this person paid": devices are
   // switched off while it says no, and back on as soon as it says yes.
   async applyPaymentState(accountId:string,paid:boolean){

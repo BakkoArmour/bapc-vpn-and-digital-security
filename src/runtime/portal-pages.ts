@@ -20,6 +20,10 @@ export const PLAN_TRIAL_DAYS=7;
 const trialOf=(t:TrialDays,id:PlanId)=>Math.max(0,Math.floor(t[id]??0));
 const longestTrial=(t:TrialDays)=>Math.max(0,...PLANS.map(p=>trialOf(t,p.id)));
 
+// BAPC Customer Support & Help Desk (#41): its inbound address opens a ticket.
+export const SUPPORT_URL="https://support.bapc.app";
+export const SUPPORT_EMAIL="support@bapc.app";
+
 export const esc=(s:unknown)=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
 
 const CSS=`
@@ -61,7 +65,8 @@ export const layout=(title:string,body:string,opts:{signedIn?:boolean}={})=>`<!d
   ?`<a href="/account">Your account</a><form class="inline" method="post" action="/auth/logout"><button class="button" type="submit">Sign out</button></form>`
   :`<a class="button" href="/auth/start">Sign in</a>`}</nav></header>
 <main>${body}</main>
-<footer>&copy; ${new Date().getUTCFullYear()} Bakko Armour LLC &middot; <a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="mailto:bakkoarmour@gmail.com">Contact</a></footer>
+<footer>&copy; ${new Date().getUTCFullYear()} Bakko Armour LLC &middot; <a href="/help">Help</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="${SUPPORT_URL}">Support</a>
+<p style="margin:10px 0 0">Cookies: this site uses one sign-in cookie, only after you sign in, and nothing for tracking or ads. <a href="/privacy#cookies">Details</a></p></footer>
 </body></html>`;
 
 const planCards=(cta:(planId:PlanId,trial:number)=>string,trials:TrialDays={})=>PLANS.map(p=>{
@@ -120,8 +125,30 @@ ${paid?`<div class="card" style="margin-top:20px"><h3>Add a device</h3><p>You ca
 <form method="post" action="/account/devices"><input type="hidden" name="csrf" value="${esc(v.csrf)}">
 <label for="kind">What kind of device?</label><select id="kind" name="kind">${kinds}</select>
 <label for="name">Name it (optional)</label><input id="name" name="name" maxlength="40" placeholder="e.g. Kitchen laptop">
-<p style="margin-top:16px"><button class="button primary" type="submit">Add device</button></p></form></div>`:""}</section>`,{signedIn:true});
+<p style="margin-top:16px"><button class="button primary" type="submit">Add device</button></p></form></div>`:""}</section>
+<section id="your-data"><h2>Your data</h2>
+<div class="card"><h3>Download your data</h3><p>Everything BAPC VPN holds about you (your account, devices, setup codes and account activity) as one file.</p>
+<p style="margin-top:12px"><a class="button" href="/account/export">Download my data</a></p></div>
+<div class="card" style="margin-top:16px"><h3>Close your account</h3><p>Switches off every device for good and deletes your BAPC VPN data. It can't be undone.${paid&&!v.access?.cancelAtPeriodEnd?` <b>Cancel your plan first</b> in <a href="${esc(v.manageUrl)}">BAPC Billing</a>, so you aren't charged again.`:""} Your bapc.app sign-in and your BAPC Billing records are separate and stay until you delete them there.</p>
+<form method="post" action="/account/delete"><input type="hidden" name="csrf" value="${esc(v.csrf)}">
+<label for="confirm">Type DELETE to confirm</label><input id="confirm" name="confirm" autocomplete="off" required pattern="DELETE" maxlength="10">
+<p style="margin-top:16px"><button class="button danger" type="submit">Close my account</button></p></form></div></section>`,{signedIn:true});
 };
+
+export const helpPage=(signedIn:boolean)=>layout("BAPC VPN help",`<div class="legal">
+<h1 style="margin-top:24px">Help</h1>
+<h2>Getting started</h2><ol><li><a href="/account">Sign in</a> with your BAPC account (or create one at bapc.app).</li><li>Pick a plan. Payments are handled by BAPC Billing with Stripe.</li><li>Under <b>Devices</b>, choose <b>Add device</b> and follow the steps shown for that device.</li></ol>
+<h2>Windows</h2><p>Add a <b>Windows PC</b> device. You get a one-time setup line to paste into PowerShell opened with <b>Run as administrator</b>. When it says <b>BAPC VPN is ON</b>, you're protected, and it stays on after restarts. To switch it off, run the same line with <code>-Disconnect</code> on the end. The setup code works once, for 48 hours.</p>
+<h2>iPhone, iPad and Android</h2><p>Install the free <b>WireGuard</b> app, then add the device in your account and scan the QR code with the app (<b>+</b>, then <b>Scan from QR code</b>). Switch the tunnel on in the app or in your phone's VPN settings. The code is shown once only; if you lose it, remove the device and add it again.</p>
+<h2>Mac and Linux</h2><p>Install WireGuard (Mac App Store, or your Linux package manager), download the setup file from your account and import it. On Linux: <code>sudo wg-quick up ./BAPC-VPN.conf</code>.</p>
+<h2>It isn't connecting</h2><ul>
+<li>Check your plan is active on <a href="/account">your account</a>. Devices pause when a payment fails and switch back on as soon as it's paid.</li>
+<li>Check the device shows <b>On</b> in your device list. A removed device can never connect again; add it as a new device.</li>
+<li>Some public Wi-Fi blocks VPNs. Try mobile data or another network.</li>
+<li>Switch the tunnel off and on again in the WireGuard app, or re-run the Windows setup line.</li></ul>
+<h2>Plans, trials and cancelling</h2><p>Manage your card, invoices and plan, or cancel, in <a href="https://billing.bapc.app">BAPC Billing</a>. Your plan stays on until the end of the period you've paid for.</p>
+<h2>Your data</h2><p>Download everything we hold about you, or close your account, under <b>Your data</b> on <a href="/account#your-data">your account</a>. See <a href="/privacy">Privacy</a> for what we keep and what we never record.</p>
+<h2>Still stuck?</h2><p>Contact BAPC Support at <a href="${SUPPORT_URL}">support.bapc.app</a> or email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>. Tell us which device and what you see; never send us a setup code or QR code.</p></div>`,{signedIn});
 
 export const windowsInvitePage=(v:{origin:string;code:string;expiresAt:Date;name:string})=>{
   const cmd=`irm ${v.origin}/install/join-vpn.ps1 -OutFile $env:TEMP\\bapc-vpn.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\\bapc-vpn.ps1 -InviteCode ${v.code}`;
@@ -156,21 +183,23 @@ export const messagePage=(title:string,text:string,signedIn=false)=>layout(title
   `<h1 style="margin-top:24px">${esc(title)}</h1><div class="card"><p>${esc(text)}</p><p style="margin-top:16px"><a class="button" href="/account">Back to your account</a></p></div>`,{signedIn});
 
 export const privacyPage=(signedIn:boolean)=>layout("Privacy at BAPC VPN",`<div class="legal">
-<h1 style="margin-top:24px">Privacy</h1><p class="muted">Last updated October 16, 2026. BAPC VPN is run by Bakko Armour LLC, USA.</p>
+<h1 style="margin-top:24px">Privacy</h1><p class="muted">Last updated November 21, 2026. BAPC VPN is run by Bakko Armour LLC, USA.</p>
 <h2>What we never record</h2><p>We don't log the websites or apps you use, your DNS lookups, or the content of your traffic. Your traffic leaves our server with the server's address instead of yours.</p>
 <h2>What we keep, and why</h2><ul>
 <li><b>Your BAPC account</b>: your name and email from your bapc.app sign-in, so you can manage your plan and devices.</li>
 <li><b>Your devices</b>: the names you give them, the private address we assign each one inside the VPN, and each device's public key. Windows PCs also send a one-time security-chip check when they join.</li>
 <li><b>Connection state</b>: while a device is connected, the VPN server holds its current public address and the time of its last connection in memory only, so the connection works. We don't write these to logs.</li>
-<li><b>Payments</b>: handled by BAPC Billing and Stripe. We see whether your plan is active, never your card number.</li></ul>
+<li><b>Payments</b>: handled by BAPC Billing and Stripe. We see whether your plan is active, never your card number.</li>
+<li><b>Account activity</b>: a security record of actions on your account (sign-ins, devices added or removed, data downloads, payment pauses), with the time and the network address it came from, so we can spot misuse. It's included in your data download.</li></ul>
+<h2 id="cookies">Cookies</h2><p>This site sets one cookie, <code>bapc_vpn_session</code>, only when you sign in. It keeps you signed in for up to 12 hours and is deleted when you sign out. It's strictly necessary for your account to work, so we don't ask for consent. We use no analytics, advertising or tracking cookies.</p>
 <h2>Who else is involved</h2><ul>
 <li>Our VPN server is hosted by Hetzner in Germany.</li>
 <li>This website is delivered through Cloudflare.</li>
 <li>Devices look up website addresses with Cloudflare's 1.1.1.1 resolver through the encrypted tunnel.</li>
 <li>Stripe processes payments through BAPC Billing.</li></ul>
 <p>We don't sell your data or use it for advertising.</p>
-<h2>Deleting your data</h2><p>Removing a device deletes it from your account and switches it off for good. To close your account entirely, email <a href="mailto:bakkoarmour@gmail.com">bakkoarmour@gmail.com</a>.</p>
-<h2>Contact</h2><p><a href="mailto:bakkoarmour@gmail.com">bakkoarmour@gmail.com</a></p></div>`,{signedIn});
+<h2>Your rights: download or delete your data</h2><p>Under <b>Your data</b> on <a href="/account#your-data">your account</a> you can download everything we hold about you as one file, or close your account. Closing switches every device off for good and deletes your BAPC VPN data; your account activity record is kept only in a form that no longer identifies you. Your bapc.app sign-in and BAPC Billing records are separate and can be deleted there. You can also ask us at <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>.</p>
+<h2>Contact</h2><p>BAPC Support: <a href="${SUPPORT_URL}">support.bapc.app</a> or <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p></div>`,{signedIn});
 
 export const termsPage=(signedIn:boolean)=>layout("BAPC VPN terms",`<div class="legal">
 <h1 style="margin-top:24px">Terms of service</h1><p class="muted">Last updated November 21, 2026. These terms are between you and Bakko Armour LLC, USA.</p>
@@ -179,4 +208,4 @@ export const termsPage=(signedIn:boolean)=>layout("BAPC VPN terms",`<div class="
 <h2>Fair and lawful use</h2><p>Don't use BAPC VPN to break the law, to attack, scan or spam other systems, to distribute malware, or to infringe others' rights. We may pause or close accounts that do, and we'll cooperate with valid legal requests within the limits of the little data we hold (see <a href="/privacy">Privacy</a>).</p>
 <h2>Service</h2><p>We work to keep BAPC VPN fast and available, but we can't promise it will never be interrupted. The service is provided "as is", to the extent the law allows.</p>
 <h2>Changes</h2><p>If we change these terms or prices, we'll tell you by email before the change affects you.</p>
-<h2>Contact</h2><p><a href="mailto:bakkoarmour@gmail.com">bakkoarmour@gmail.com</a></p></div>`,{signedIn});
+<h2>Contact</h2><p>BAPC Support: <a href="${SUPPORT_URL}">support.bapc.app</a> or <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p></div>`,{signedIn});
