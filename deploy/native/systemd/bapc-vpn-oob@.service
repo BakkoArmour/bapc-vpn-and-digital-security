@@ -1,0 +1,45 @@
+# BAPC VPN, instance %i (prod or staging): out-of-band recovery channel. One of the units started by bapc-vpn@%i.target.
+# Settings and secrets: /etc/bapc-vpn/%i.env (root:bapc-vpn 0640). Code: /opt/bapc-vpn-native/%i/current (a release).
+[Unit]
+Description=BAPC VPN %i: out-of-band recovery channel
+PartOf=bapc-vpn@%i.target
+After=network-online.target postgresql.service bapc-vpn-migrate@%i.service
+Wants=network-online.target
+Requires=bapc-vpn-migrate@%i.service
+
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node dist/src/runtime/oob-server.js
+User=bapc-vpn
+Group=bapc-vpn
+WorkingDirectory=/opt/bapc-vpn-native/%i/current
+EnvironmentFile=/etc/bapc-vpn/%i.env
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=3
+# Hardening: an unprivileged user, no new privileges, a read-only system and no home directories.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+UMask=0077
+MemoryMax=512M
+
+[Install]
+WantedBy=bapc-vpn@%i.target

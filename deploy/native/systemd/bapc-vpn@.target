@@ -1,0 +1,7 @@
+# BAPC VPN, instance %i: every service. `systemctl restart bapc-vpn@prod.target` restarts them all (migrations first).
+[Unit]
+Description=BAPC VPN %i: all services
+Wants=bapc-vpn-migrate@%i.service bapc-vpn-api@%i.service bapc-vpn-portal@%i.service bapc-vpn-grpc@%i.service bapc-vpn-oob@%i.service bapc-vpn-worker@%i.service bapc-vpn-dns@%i.service bapc-vpn-console@%i.service bapc-vpn-relay@%i.service bapc-vpn-egress@%i.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,10 +1,13 @@
 [Unit]
 Description=BAPC VPN nightly verified database backup (see bapc-vpn-backup.sh)
-After=network-online.target docker.service
+After=network-online.target docker.service postgresql.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
+# After the move off Docker (deploy/native/cutover.sh) this holds DATABASE_URL for the host database, and the script uses
+# host pg_dump/pg_restore/psql instead of the Docker container. Absent = the Docker Compose stack, as before.
+EnvironmentFile=-/etc/bapc-vpn-backup/env
 ExecStart=/usr/local/bin/bapc-vpn-backup
 Nice=10
 IOSchedulingClass=idle

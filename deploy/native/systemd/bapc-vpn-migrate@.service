@@ -1,0 +1,24 @@
+# BAPC VPN, instance %i: applies db/*.sql before any service starts (checksum-tracked, advisory-locked, forward-only).
+# Every service Requires= this, so nothing starts on a database that failed to migrate (as compose's depends_on did).
+[Unit]
+Description=BAPC VPN %i: database migrations
+After=network-online.target postgresql.service
+Wants=network-online.target
+PartOf=bapc-vpn@%i.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=bapc-vpn
+Group=bapc-vpn
+WorkingDirectory=/opt/bapc-vpn-native/%i/current
+EnvironmentFile=/etc/bapc-vpn/%i.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/src/runtime/migrate-cli.js db up
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077

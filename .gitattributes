@@ -5,3 +5,5 @@
 *.service text eol=lf
 *.sql text eol=lf
 *.timer text eol=lf
+*.target text eol=lf
+*.env.example text eol=lf
