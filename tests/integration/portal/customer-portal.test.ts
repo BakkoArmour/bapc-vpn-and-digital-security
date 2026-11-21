@@ -15,6 +15,7 @@ import {BapcBillingClient, type AccessState} from "../../../src/infrastructure/b
 import {createPortalHandler, type PortalSessionStore} from "../../../src/runtime/portal-handler.js";
 import {AuthorizationError} from "../../../src/domain/errors.js";
 import type {AccountDataStore, AccountExport} from "../../../src/application/account-data.js";
+import {BapcNotifier} from "../../../src/infrastructure/bapc-notifications.js";
 
 // The customer portal end to end against in-memory stores: account-attested
 // app devices, account-bound Windows invites redeemed through the real TPM
@@ -52,6 +53,7 @@ class MemoryAccountData implements AccountDataStore {
   log:{accountId:string;actor:"customer"|"system";action:string;detail:Record<string,unknown>;ip:string|null;at:Date}[]=[];
   constructor(private customers:MemoryCustomers){}
   async audit(accountId:string,actor:"customer"|"system",action:string,detail:Record<string,unknown>={},ip:string|null=null){this.log.push({accountId,actor,action,detail,ip,at:new Date()});}
+  async hasSignedInBefore(accountId:string){return this.log.some(e=>e.accountId===accountId&&e.action==="auth.signed_in");}
   async exportAccount(accountId:string):Promise<AccountExport>{
     return {
       devices:[...this.customers.rows.values()].filter(r=>r.account.accountId===accountId)
@@ -160,6 +162,8 @@ test("BapcBillingClient never mistakes an outage for an unpaid account",async()=
 const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>;status?:string;renews?:string;cancelAtPeriodEnd?:boolean;billingDown?:{value:boolean}}={})=>{
   const ctx=setup();
   const accountData=new MemoryAccountData(ctx.customers);
+  const sent:{to:string;subject:string;text:string}[]=[];
+  const mail={send:async(to:string,subject:string,text:string)=>{sent.push({to,subject,text});return "accepted" as const;}};
   const handler=createPortalHandler({
     origin:"http://portal.test",
     identity:{
@@ -175,12 +179,12 @@ const startPortal=async(paid:{value:boolean},opts:{trials?:Record<string,number>
       }
     },
     sessions:ctx.customers,devices:ctx.devices,join:ctx.join,joinScript:()=>"# script",
-    trials:()=>opts.trials??{},accountData
+    trials:()=>opts.trials??{},accountData,mail
   });
   const server:Server=createServer((q,s)=>void handler(q,s));
   await new Promise<void>(r=>server.listen(0,"127.0.0.1",r));
   const base=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return {...ctx,server,base,accountData};
+  return {...ctx,server,base,accountData,sent};
 };
 
 const signIn=async(base:string)=>{
@@ -322,10 +326,10 @@ test("sign-in, adding and removing a device and sign-out are all in the audit tr
     const nodeId=[...customers.rows.keys()][0]!;
     await formPost(base,cookie,`/account/devices/${nodeId}/remove`,{csrf});
     await formPost(base,cookie,"/auth/logout",{});
-    const actions=accountData.log.map(e=>`${e.actor}:${e.action}`);
+    const actions=accountData.log.filter(e=>e.actor==="customer").map(e=>`${e.actor}:${e.action}`);
     assert.deepEqual(actions,["customer:auth.signed_in","customer:device.added","customer:device.removed","customer:auth.signed_out"]);
-    assert.ok(accountData.log.every(e=>e.accountId===ACCOUNT.accountId&&e.at instanceof Date&&e.ip));
-    assert.equal(accountData.log[1]!.detail.kind,"android");
+    assert.ok(accountData.log.filter(e=>e.actor==="customer").every(e=>e.accountId===ACCOUNT.accountId&&e.at instanceof Date&&e.ip));
+    assert.equal(accountData.log.find(e=>e.action==="device.added")!.detail.kind,"android");
   }finally{server.close();}
 });
 
@@ -415,5 +419,51 @@ test("help, privacy and terms point to BAPC Support, explain the one cookie, and
     const help=await (await fetch(`${base}/help`)).text();
     assert.match(help,/It isn't connecting/);assert.match(help,/support@bapc\.app/);
     assert.match(await (await fetch(`${base}/privacy`)).text(),/bapc_vpn_session/);
+  }finally{server.close();}
+});
+
+// --- customer email (BAPC Notifications) ---
+
+test("BapcNotifier posts to BAPC Notifications with the app key, and reports outcomes instead of throwing",async()=>{
+  let seen:{url:string;auth:string;body:Record<string,string>}|null=null;
+  const ok=new BapcNotifier("n".repeat(40),"https://notifications.example",(async(u:URL,init?:RequestInit)=>{
+    seen={url:String(u),auth:(init!.headers as Record<string,string>).authorization!,body:JSON.parse(String(init!.body))};
+    return Response.json({messageId:"m1"},{status:202});
+  }) as typeof fetch);
+  assert.equal(await ok.send("pat@example.com","Hi","Body"),"accepted");
+  assert.equal(seen!.url,"https://notifications.example/v1/email");
+  assert.equal(seen!.auth,`Bearer ${"n".repeat(40)}`);
+  assert.deepEqual(seen!.body,{from:"BAPC VPN <no-reply@bapc.app>",to:"pat@example.com",subject:"Hi",text:"Body",replyTo:"support@bapc.app"});
+  assert.equal(await new BapcNotifier("").send("a@b.c","s","t"),"not_connected");
+  const status=(n:number)=>new BapcNotifier("n".repeat(40),"https://n.example",(async()=>new Response("{}",{status:n})) as typeof fetch);
+  assert.equal(await status(400).send("a@b.c","s","t"),"rejected");
+  assert.equal(await status(503).send("a@b.c","s","t"),"retry");
+  assert.equal(await new BapcNotifier("n".repeat(40),"https://n.example",(async()=>{throw new Error("down");}) as typeof fetch).send("a@b.c","s","t"),"retry");
+});
+
+test("customers are emailed: welcome once, each new device, paused and resumed devices, and account closed",async()=>{
+  const paid={value:true};
+  const {server,base,customers,sent}=await startPortal(paid);
+  try{
+    const cookie=await signIn(base);
+    await signIn(base); // a second sign-in doesn't send a second welcome
+    assert.deepEqual(sent.map(m=>m.subject),["Welcome to BAPC VPN"]);
+    assert.equal(sent[0]!.to,"pat@example.com");
+    const csrf=[...customers.sessionsByHash.values()][0]!.csrfToken;
+    await formPost(base,cookie,"/account/devices",{csrf,kind:"iphone",name:"Pat's iPhone"});
+    assert.equal(sent.at(-1)!.subject,"New device on your BAPC VPN: Pat's iPhone");
+    assert.match(sent.at(-1)!.text,/If this wasn't you, remove it now/);
+    assert.doesNotMatch(sent.at(-1)!.text,/PrivateKey|BAPC-[0-9A-Z]{6}-/,"never a key or setup code in email");
+    paid.value=false;
+    await fetch(`${base}/account`,{headers:{cookie}});
+    assert.equal(sent.at(-1)!.subject,"Your BAPC VPN devices are paused");
+    await fetch(`${base}/account`,{headers:{cookie}});
+    assert.equal(sent.filter(m=>m.subject.includes("paused")).length,1,"no repeat while nothing changes");
+    paid.value=true;
+    await fetch(`${base}/account`,{headers:{cookie}});
+    assert.equal(sent.at(-1)!.subject,"Your BAPC VPN devices are back on");
+    paid.value=false;
+    await formPost(base,cookie,"/account/delete",{csrf,confirm:"DELETE"});
+    assert.equal(sent.at(-1)!.subject,"Your BAPC VPN account is closed");
   }finally{server.close();}
 });

@@ -86,6 +86,13 @@ export class PgCustomerStore implements CustomerStore, CustomerDeviceRecorder {
     return r.rows.length;
   }
 
+  // The address to email about an account's devices (the one used when its newest device was added).
+  async accountEmail(accountId:string):Promise<string|null>{
+    const r=await this.db.query(
+      `SELECT email FROM ${T}.customer_devices WHERE account_id=$1 AND email<>'' ORDER BY created_at DESC LIMIT 1`,[accountId]);
+    return r.rows[0]?.email??null;
+  }
+
   async accountsWithDevices():Promise<string[]>{
     const r=await this.db.query(`SELECT DISTINCT account_id FROM ${T}.customer_devices WHERE removed_at IS NULL`);
     return r.rows.map(x=>x.account_id);

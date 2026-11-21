@@ -19,6 +19,11 @@ export class PgAccountData implements AccountDataStore {
     );
   }
 
+  async hasSignedInBefore(accountId:string){
+    const r=await this.db.query(`SELECT 1 FROM ${T}.portal_audit WHERE account_id=$1 AND action='auth.signed_in' LIMIT 1`,[accountId]);
+    return r.rows.length>0;
+  }
+
   async exportAccount(accountId:string):Promise<AccountExport>{
     const devices=await this.db.query(
       `SELECT cd.name,cd.kind,cd.created_at,cd.suspended,cd.removed_at,n.internal_ipv4,n.last_handshake

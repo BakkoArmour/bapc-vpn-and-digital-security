@@ -14,6 +14,7 @@ import {AccountAttestedVerifier} from "../infrastructure/attestation/account-att
 import {PgEnrollmentInviteStore} from "../infrastructure/pg-enrollment-invites.js";
 import {PgCustomerStore} from "../infrastructure/pg-customer-store.js";
 import {PgAccountData} from "../infrastructure/pg-account-data.js";
+import {BapcNotifier, customerEmails} from "../infrastructure/bapc-notifications.js";
 import {BapcBillingClient, BapcIdentityClient} from "../infrastructure/bapc-accounts.js";
 import {EnrollmentService} from "../application/enrollment.js";
 import {DeviceJoinService} from "../application/device-join.js";
@@ -52,6 +53,8 @@ const certificateIssuer=new TrustCoreCertificateIssuer(new TrustCoreIssuer(
 ));
 const customers=new PgCustomerStore(db);
 const accountData=new PgAccountData(db);
+// BAPC Notifications (app id bapc-vpn). Without the key, emails are skipped and logged as not_connected.
+const mail=new BapcNotifier(env.BAPC_NOTIFICATIONS_KEY??"",env.BAPC_NOTIFICATIONS_URL??"https://notifications.bapc.app");
 const invites=new PgEnrollmentInviteStore(db);
 // Derived, not a new secret to manage: only this process ever computes it.
 const accountAttestation=new AccountAttestedVerifier(
@@ -93,7 +96,7 @@ const trialTimer=setInterval(()=>void refreshTrials(),TRIAL_REFRESH_MS);
 const joinScript=readFileSync(JOIN_SCRIPT_PATH,"utf8");
 const handler=createPortalHandler({
   origin:(env.PORTAL_PUBLIC_ORIGIN??"https://vpn.bapc.app").replace(/\/$/,""),
-  identity,billing,sessions:customers,devices,join:deviceJoin,joinScript:()=>joinScript,trials:()=>trials,accountData
+  identity,billing,sessions:customers,devices,join:deviceJoin,joinScript:()=>joinScript,trials:()=>trials,accountData,mail
 });
 
 // Billing is checked whenever a customer opens their account, and here on a
@@ -110,6 +113,13 @@ const syncPayments=async()=>{
         console.log(JSON.stringify({event:"portal.payment_state",accountId,paid:access.paid,devices:changed}));
         await accountData.audit(accountId,"system",access.paid?"payment.devices_resumed":"payment.devices_paused",{devices:changed,status:access.status})
           .catch(error=>console.error(JSON.stringify({event:"portal.audit_failed",error:error instanceof Error?error.message:String(error)})));
+        const to=await customers.accountEmail(accountId);
+        if(to){
+          const msg=access.paid?customerEmails.devicesResumed(changed):customerEmails.devicesPaused(changed);
+          const outcome=await mail.send(to,msg.subject,msg.text);
+          if(outcome==="accepted")await accountData.audit(accountId,"system","email.sent",{kind:access.paid?"devices_resumed":"devices_paused"}).catch(()=>{});
+          else console.error(JSON.stringify({event:"portal.email_not_sent",kind:"payment_state",outcome}));
+        }
       }
     }catch(error){
       console.error(JSON.stringify({event:"portal.payment_check_failed",accountId,error:error instanceof Error?error.message:String(error)}));
@@ -122,7 +132,8 @@ const server=createServer((req,res)=>void handler(req,res));
 server.requestTimeout=20_000;server.headersTimeout=10_000;server.keepAliveTimeout=5_000;
 const port=Number(env.PORTAL_PORT??8095),host=env.PORTAL_BIND_HOST??"127.0.0.1";
 server.listen(port,host,()=>console.log(JSON.stringify({
-  event:"ready",service:"bapc-vpn-portal",host,port,signIn:!!identity,billing:!!billing,gateway:!!config.vpnGateway
+  event:"ready",service:"bapc-vpn-portal",host,port,signIn:!!identity,billing:!!billing,gateway:!!config.vpnGateway,
+  email:(env.BAPC_NOTIFICATIONS_KEY??"").length>=32
 })));
 
 const shutdown=()=>{clearInterval(timer);clearInterval(trialTimer);server.close(()=>void db.close().then(()=>process.exit(0)));setTimeout(()=>process.exit(1),10_000).unref();};

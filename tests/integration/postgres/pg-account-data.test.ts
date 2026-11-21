@@ -28,7 +28,9 @@ test("live: audit, export and erasure of a portal account against real Postgres"
     await db.query(`INSERT INTO bapc_security_core.enrollment_invites(invite_id,code_hash,label,created_by,expires_at,account_id,account_email,device_name)
       VALUES($1,$2,'customer portal',$3,now()+interval '1 day',$4,'pat@example.com','PC')`,[inviteId,createHash("sha256").update(inviteId).digest("hex"),`customer:${account}`,account]);
     await customers.createSession(createHash("sha256").update(account).digest("hex"),{accountId:account,email:"pat@example.com",name:"Pat",csrfToken:"c"},new Date(Date.now()+3600_000));
+    assert.equal(await data.hasSignedInBefore(account),false);
     await data.audit(account,"customer","auth.signed_in",{},"203.0.113.9");
+    assert.equal(await data.hasSignedInBefore(account),true);
     await data.audit(account,"customer","device.added",{node_id:nodeId,kind:"android"},"203.0.113.9");
     await data.audit(other,"customer","auth.signed_in",{},"198.51.100.1");
 

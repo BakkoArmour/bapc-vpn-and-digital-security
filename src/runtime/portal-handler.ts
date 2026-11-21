@@ -4,10 +4,11 @@ import QRCode from "qrcode-svg";
 import {DomainError} from "../domain/errors.js";
 import {asHttpError} from "../api/rest/errors.js";
 import {MemoryRateLimiter, type RateLimitRule} from "../api/rest/rate-limit.js";
-import {isDeviceKind, type CustomerDeviceService, type CustomerSession} from "../application/customer-devices.js";
+import {DEVICE_KINDS, isDeviceKind, type CustomerDeviceService, type CustomerSession} from "../application/customer-devices.js";
 import type {DeviceJoinService} from "../application/device-join.js";
 import {randomToken, sha256Hex, type AccessState, type BapcUser} from "../infrastructure/bapc-accounts.js";
 import type {AccountDataStore} from "../application/account-data.js";
+import {customerEmails, type CustomerEmail, type SendOutcome} from "../infrastructure/bapc-notifications.js";
 import {
   accountPage, appDevicePage, helpPage, isPlanId, landingPage, messagePage, privacyPage, termsPage, windowsInvitePage, type TrialDays
 } from "./portal-pages.js";
@@ -38,6 +39,8 @@ export interface PortalDeps {
   trials?:()=>TrialDays;
   // Audit trail, data export and erasure (db/022). Required in production (customer-portal.ts always passes it).
   accountData:AccountDataStore;
+  // Customer email (BAPC Notifications). Optional: without it nothing is sent.
+  mail?:{send(to:string,subject:string,text:string):Promise<SendOutcome>};
 }
 
 const COOKIE="bapc_vpn_session";
@@ -94,12 +97,23 @@ export const createPortalHandler=(deps:PortalDeps)=>{
     catch(error){console.error(JSON.stringify({event:"portal.audit_failed",action,error:error instanceof Error?error.message:String(error)}));}
   };
 
-  const checkAccess=async(accountId:string)=>{
+  // Customer email never takes an action down with it either.
+  const email=async(to:string,accountId:string,kind:string,msg:CustomerEmail)=>{
+    if(!deps.mail)return;
+    const outcome=await deps.mail.send(to,msg.subject,msg.text).catch(()=>"retry" as const);
+    if(outcome!=="accepted")console.error(JSON.stringify({event:"portal.email_not_sent",kind,outcome}));
+    else await audit(accountId,"email.sent",{kind},null,"system");
+  };
+
+  const checkAccess=async(accountId:string,to?:string)=>{
     if(!deps.billing)return null;
     try{
       const access=await deps.billing.access(accountId);
       const changed=await deps.devices.applyPaymentState(accountId,access.paid);
-      if(changed)await audit(accountId,access.paid?"payment.devices_resumed":"payment.devices_paused",{devices:changed,status:access.status},null,"system");
+      if(changed){
+        await audit(accountId,access.paid?"payment.devices_resumed":"payment.devices_paused",{devices:changed,status:access.status},null,"system");
+        if(to)await email(to,accountId,access.paid?"devices_resumed":"devices_paused",access.paid?customerEmails.devicesResumed(changed):customerEmails.devicesPaused(changed));
+      }
       return access;
     }catch{return null;}
   };
@@ -153,7 +167,9 @@ export const createPortalHandler=(deps:PortalDeps)=>{
       const token=randomToken();
       await deps.sessions.createSession(sha256Hex(token),{accountId:user.id,email:user.email.toLowerCase(),name:user.name||null,csrfToken:randomToken()},
         new Date(Date.now()+SESSION_HOURS*3_600_000));
+      const firstVisit=!(await deps.accountData.hasSignedInBefore(user.id).catch(()=>true));
       await audit(user.id,"auth.signed_in",{},ip);
+      if(firstVisit)await email(user.email.toLowerCase(),user.id,"welcome",customerEmails.welcome(user.name||null));
       redirect(res,pending.nextPath,[cookie(token,SESSION_HOURS*3600)]);
       return;
     }
@@ -173,7 +189,7 @@ export const createPortalHandler=(deps:PortalDeps)=>{
         return;
       }
       if(method==="GET"&&path==="/account"){
-        const access=await checkAccess(s.accountId);
+        const access=await checkAccess(s.accountId,s.email);
         const wantPlan=url.searchParams.get("plan");
         send(res,200,accountPage({
           email:s.email,csrf:s.csrfToken,access,devices:await deps.devices.list(s.accountId),
@@ -187,7 +203,7 @@ export const createPortalHandler=(deps:PortalDeps)=>{
       if(method==="GET"&&path==="/account/export"){
         limit("export");
         const data=await deps.accountData.exportAccount(s.accountId);
-        const access=await checkAccess(s.accountId);
+        const access=await checkAccess(s.accountId,s.email);
         await audit(s.accountId,"account.exported",{},ip);
         const body={
           exported_at:new Date().toISOString(),service:"BAPC VPN (vpn.bapc.app)",
@@ -211,7 +227,7 @@ export const createPortalHandler=(deps:PortalDeps)=>{
 
       if(path==="/account/devices"){
         limit("addDevice");
-        const access=await checkAccess(s.accountId);
+        const access=await checkAccess(s.accountId,s.email);
         if(!access?.paid){redirect(res,`/account?msg=${encodeURIComponent("Pick a plan first, then add your devices.")}`);return;}
         const kind=form.get("kind");
         if(!isDeviceKind(kind))throw Object.assign(new Error("Pick a kind of device."),{status:400});
@@ -224,6 +240,7 @@ export const createPortalHandler=(deps:PortalDeps)=>{
         }
         const added=await deps.devices.addAppDevice(account,kind,form.get("name"));
         await audit(s.accountId,"device.added",{node_id:added.nodeId,kind,name:added.name},ip);
+        await email(s.email,s.accountId,"device_added",customerEmails.deviceAdded(added.name,DEVICE_KINDS[kind]));
         const qrSvg=new QRCode({content:added.config,padding:2,ecl:"M",join:true,container:"svg-viewbox"}).svg();
         send(res,200,appDevicePage({kind,name:added.name,config:added.config,qrSvg}));
         return;
@@ -242,13 +259,14 @@ export const createPortalHandler=(deps:PortalDeps)=>{
         if((form.get("confirm")??"").trim()!==DELETE_CONFIRMATION){
           redirect(res,`/account?msg=${encodeURIComponent(`To close your account, type ${DELETE_CONFIRMATION} in the box.`)}#your-data`);return;
         }
-        const access=deps.billing?await checkAccess(s.accountId):{paid:false,cancelAtPeriodEnd:false} as Pick<AccessState,"paid"|"cancelAtPeriodEnd">;
+        const access=deps.billing?await checkAccess(s.accountId,s.email):{paid:false,cancelAtPeriodEnd:false} as Pick<AccessState,"paid"|"cancelAtPeriodEnd">;
         if(access===null){redirect(res,`/account?msg=${encodeURIComponent("We couldn't check your plan with BAPC Billing just now, so nothing was deleted. Try again in a minute.")}#your-data`);return;}
         if(access.paid&&!access.cancelAtPeriodEnd){
           redirect(res,`/account?msg=${encodeURIComponent("Cancel your plan in BAPC Billing first (Manage or cancel), then close your account. Nothing was deleted.")}#your-data`);return;
         }
         const revoked=await deps.devices.revokeAll(s.accountId);
         await audit(s.accountId,"account.closed",{devices_revoked:revoked},ip);
+        await email(s.email,s.accountId,"account_closed",customerEmails.accountClosed());
         const erased=await deps.accountData.eraseAccount(s.accountId);
         console.log(JSON.stringify({event:"portal.account_closed",devicesRevoked:revoked,...erased}));
         send(res,200,messagePage("Your BAPC VPN account is closed",

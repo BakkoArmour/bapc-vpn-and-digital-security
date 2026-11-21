@@ -13,6 +13,8 @@ export interface AccountExport {
 
 export interface AccountDataStore {
   audit(accountId:string,actor:"customer"|"system",action:string,detail?:Record<string,unknown>,ip?:string|null):Promise<void>;
+  // Whether this account has signed in to the portal before (decides the one-time welcome email).
+  hasSignedInBefore(accountId:string):Promise<boolean>;
   exportAccount(accountId:string):Promise<AccountExport>;
   // Deletes or pseudonymises everything the portal holds about the account:
   // open invites and sessions are deleted; removed device rows (kept so the
