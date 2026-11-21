@@ -1,3 +1,4 @@
+import "./observability.js";
 import * as grpc from "@grpc/grpc-js";
 import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 import {loadConfig} from "../config.js";

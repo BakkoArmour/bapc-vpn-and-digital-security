@@ -23,6 +23,11 @@ x-control-env: &control-env
   # see deploy/.env for which real provider this deployment is configured
   # to expect evidence from.
   ATTESTATION_PROVIDER: ${ATTESTATION_PROVIDER:?set ATTESTATION_PROVIDER to windows-tpm, linux-tpm2, or apple-secure-enclave}
+  # BAPC Observability error reporting (src/infrastructure/error-reporting.ts). Unset = errors are only logged.
+  OBOP_INGEST_TOKEN: ${OBOP_INGEST_TOKEN:-}
+  OBOP_SYSTEM_ID: ${OBOP_SYSTEM_ID:-}
+  OBOP_SERVICE_KEY: ${OBOP_SERVICE_KEY:-web}
+  BAPC_RELEASE: ${BAPC_RELEASE:-}
 
 # Three networks. An earlier version of this file used two (control/egress)
 # on the theory that `internal: true` meant "no outbound internet" — but
@@ -150,8 +155,14 @@ services:
   # accumulate in event_outbox forever and are never delivered.
   maintenance-worker:
     <<: *app-image
-    environment: *control-env
-    networks: [control]
+    environment:
+      <<: *control-env
+      # Daily usage totals to BAPC Data Warehouse (src/infrastructure/warehouse-feed.ts). Unset = feed off.
+      WAREHOUSE_URL: ${WAREHOUSE_URL:-}
+      WAREHOUSE_SOURCE_ID: ${WAREHOUSE_SOURCE_ID:-}
+      WAREHOUSE_SIGNING_SECRET: ${WAREHOUSE_SIGNING_SECRET:-}
+    # egress: it sends usage totals to warehouse.bapc.app and errors to telemetry.bapc.app.
+    networks: [control, egress]
     depends_on:
       migrate: {condition: service_completed_successfully}
     command: ["node", "dist/src/runtime/maintenance-worker.js"]

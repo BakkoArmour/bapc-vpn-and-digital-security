@@ -1,3 +1,4 @@
+import "./observability.js";
 import {createServer} from "node:http";
 import {createHmac} from "node:crypto";
 import {readFileSync} from "node:fs";

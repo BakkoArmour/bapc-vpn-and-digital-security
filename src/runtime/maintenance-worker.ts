@@ -1,3 +1,4 @@
+import "./observability.js";
 import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 import {loadConfig} from "../config.js";
 import {Postgres} from "../infrastructure/postgres/client.js";
@@ -15,6 +16,7 @@ import {KeyRotationSchedulerService} from "../application/key-rotation-scheduler
 import {PgKeyRotationLedger} from "../../services/mesh-controller/pg-key-rotation-ledger.js";
 import {AuditService} from "../application/audit.js";
 import {SystemClock,Sha256} from "../infrastructure/memory.js";
+import {dailyActivity, sendActivity, warehouseConfig} from "../infrastructure/warehouse-feed.js";
 
 /**
  * Runs the two background jobs that TransactionalOutbox/db/005-006 were
@@ -135,8 +137,27 @@ const runKeyRotationLoop=async()=>{
   }
 };
 
-console.log(JSON.stringify({event:"ready",service:"bapc-maintenance-worker",outboxIntervalMs,retentionIntervalMs,retentionMonths,reconciliationIntervalMs,keyRotationIntervalMs}));
-const loops=Promise.all([runOutboxLoop(),runRetentionLoop(),runReconciliationLoop(),runKeyRotationLoop()]);
+// Daily usage totals for yesterday (UTC) to the BAPC Data Warehouse, every 6 hours: the Warehouse records a
+// repeat as a duplicate, so a missed run is simply covered by the next one. Off without WAREHOUSE_* settings.
+const warehouse=warehouseConfig();
+const WAREHOUSE_INTERVAL_MS=6*3_600_000;
+const runWarehouseLoop=async()=>{
+  while(!stopped&&warehouse){
+    const day=new Date(Date.now()-86_400_000).toISOString().slice(0,10);
+    try{
+      const a=await dailyActivity(db,day);
+      const result=await sendActivity(warehouse,a);
+      console.log(JSON.stringify({event:"warehouse.activity_sent",day,...result}));
+      if(result.rejected)console.error(JSON.stringify({event:"warehouse.activity_rejected",day,rejected:result.rejected}));
+    }catch(error){
+      console.error(JSON.stringify({event:"warehouse.activity_failed",day,error:error instanceof Error?error.message:String(error)}));
+    }
+    for(let waited=0;waited<WAREHOUSE_INTERVAL_MS&&!stopped;waited+=10_000)await new Promise(r=>setTimeout(r,10_000));
+  }
+};
+
+console.log(JSON.stringify({event:"ready",service:"bapc-maintenance-worker",outboxIntervalMs,retentionIntervalMs,retentionMonths,reconciliationIntervalMs,keyRotationIntervalMs,warehouse:!!warehouse}));
+const loops=Promise.all([runOutboxLoop(),runRetentionLoop(),runReconciliationLoop(),runKeyRotationLoop(),runWarehouseLoop()]);
 
 const shutdown=async()=>{stopped=true;await loops;await db.close();process.exit(0);};
 process.on("SIGTERM",()=>void shutdown());

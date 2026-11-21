@@ -1,3 +1,4 @@
+import "./observability.js";
 import {randomUUID} from "node:crypto";
 import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 import {loadConfig} from "../config.js";

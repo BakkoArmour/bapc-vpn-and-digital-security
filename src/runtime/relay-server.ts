@@ -1,3 +1,4 @@
+import "./observability.js";
 import {BlindRelayServer} from "../../services/relay/relay-server.js";
 import {CpuLoadSampler, ThroughputSampler} from "../../native/shared/process-metrics.js";
 

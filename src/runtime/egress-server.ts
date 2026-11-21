@@ -1,3 +1,4 @@
+import "./observability.js";
 import {Socks5EgressProxy} from "../../services/egress/socks5-proxy.js";
 import {CpuLoadSampler} from "../../native/shared/process-metrics.js";
 

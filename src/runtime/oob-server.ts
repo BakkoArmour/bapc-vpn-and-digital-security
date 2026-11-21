@@ -1,3 +1,4 @@
+import "./observability.js";
 import {OobServer} from "../../services/oob-controller/oob-server.js";
 import {hydrateSecretsFromAws} from "../infrastructure/aws-secrets.js";
 

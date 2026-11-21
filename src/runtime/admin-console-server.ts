@@ -1,3 +1,4 @@
+import "./observability.js";
 import {createServer} from "node:http";
 import {readFile} from "node:fs/promises";
 import {join, extname} from "node:path";
