@@ -40,7 +40,7 @@ nav{display:flex;gap:16px;flex-wrap:wrap;align-items:center}nav a{color:var(--mu
 .button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}.button.danger{color:var(--bad);border-color:var(--bad);padding:6px 12px;font-size:14px}
 .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
-.card h3{margin:0 0 6px;font-size:18px}.card p{margin:0;color:var(--muted)}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.card h3{margin:0 0 6px;font-size:18px}.card p{margin:0;color:var(--muted)}
 section{margin-top:56px}section>h2{font-size:28px;margin:0 0 18px}
 .price{font-size:40px;font-weight:800}.price small{font-size:16px;color:var(--muted);font-weight:500}
 .plan.best{border-color:var(--accent)}.tag{display:inline-block;font-size:12px;font-weight:700;color:var(--accent-ink);background:var(--accent);border-radius:99px;padding:2px 10px;margin-bottom:8px}
@@ -86,7 +86,7 @@ export const landingPage=(signedIn:boolean,trials:TrialDays={})=>{
 <div class="hero"><h1>Private internet for every device you own.</h1>
 <p>BAPC VPN encrypts everything your devices send and hides your home address from the sites you visit. Windows, Mac, iPhone and Android, up to ${DEVICE_LIMIT} devices, from $2.99 a month.${trial?` Try it free for ${trial} days.`:""}</p>
 <a class="button primary" href="/account">${trial?`Start your free trial`:"Get BAPC VPN"}</a> <a class="button" href="#pricing">See pricing</a></div>
-<section><div class="grid">
+<section><h2 class="sr-only">Why BAPC VPN</h2><div class="grid">
 <div class="card"><h3>Modern encryption</h3><p>Built on WireGuard, the fast, modern VPN protocol built into Linux and used by security teams.</p></div>
 <div class="card"><h3>No activity logs</h3><p>We don't record the sites you visit, your DNS lookups or what you send. <a href="/privacy">Read exactly what we keep.</a></p></div>
 <div class="card"><h3>All your devices</h3><p>Windows, Mac, iPhone, iPad, Android and Linux. Add or remove devices yourself, anytime.</p></div>
