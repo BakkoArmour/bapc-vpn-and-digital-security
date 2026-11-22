@@ -1,13 +1,13 @@
 # BAPC VPN: Enterprise Standard completion report
 
 22 Nov 2026, after production moved onto BAPC infrastructure (App Hosting + Cheisgos + Secrets + Registry + Backup);
-re-checked 07:30 UTC the same day after the security-review fixes.
+re-checked 07:30 UTC the same day after the security-review fixes; production device CA live 07:55 UTC.
 Checked against `bapc-cloud-and-deploy/docs/ENTERPRISE-STANDARD.md`. A box passes only on evidence (Part 2).
-**Verdict: not done.** Four sections are Partial; each needs something only the owner can do or approve.
+**Verdict: not done.** Three sections are Partial; each needs something only the owner can do or approve.
 
 | Section | Pass / Partial / Fail | What's missing | Plan to fix |
 |---|---|---|---|
-| Accounts, security and access | **Partial** | Production device certificates are still signed by the development CA ("BAPC Development CA - not for production", its key in the database), which breaks "keys in a vault". Fixed in code (e609259: its own CA from BAPC Secrets, production refuses the development CA) and live on staging; not yet released to production. Owner-approved exceptions apply: R3, R6, R8. | Owner OK to make the production CA in BAPC Secrets and release e609259 (the one device certificate issued so far is re-issued); then remove the development CA's key from the production database. |
+| Accounts, security and access | **Pass** | Nothing. Production signs device certificates with its own CA from BAPC Secrets ("BAPC VPN Device CA 2026", live 22 Nov 07:55 UTC) and refuses the development CA. Owner-approved exceptions apply: R3 (sign-in features live in Sign in with BAPC), R6 (no two-step sign-in), R8 (one-person customer accounts). | Remove the old development CA's key from the production database (owner's yes; it is no longer used). |
 | Data, reliability and backups | **Pass** | Nothing required. Worth doing: a point-in-time restore rehearsal on the Cheisgos cluster (the nightly logical backup is restore-tested every night already). | Run the Cheisgos Recovery rehearsal into an isolated copy. |
 | Payments and commerce | **Partial** | 1. A real purchase and refund has never been run end to end on the live site. 2. EU/UK consumer VAT: registration not done, so Billing rule 6 is deployed but switched off. | 1. Owner buys and refunds a plan (5 minutes). 2. Register for EU OSS and UK VAT, enter the numbers in Billing and Stripe, switch rule 6 on. |
 | Quality | **Partial** | A person-run screen-reader pass (WCAG AA). Automated accessibility checks pass. | Owner or a tester walks sign-up, account and admin with NVDA or VoiceOver. |
@@ -20,7 +20,7 @@ Checked against `bapc-cloud-and-deploy/docs/ENTERPRISE-STANDARD.md`. A box passe
 - Staff admin area (vpn.bapc.app/admin) for bapc.app admins only (404 for everyone else), enforced on the server; owner confirmed it works.
 - Customer data is separated per account; every action is in `portal_audit`, and staff actions are audited as `staff`.
 - Secrets live in BAPC Secrets (`bapc-vpn-prod`), delivered to containers as Podman secrets; none are in code, images or command lines.
-- Each stage's services read only their own BAPC Secrets environment (App Hosting refuses others), run on their own network, and get per-deployment secret names. Each Cheisgos cluster sees only its own backups, passphrase and superuser password (both stored in BAPC Secrets). Device CA: own CA per stage from BAPC Secrets, only the API, portal and gRPC receive it (staging live; production waits for the owner).
+- Each stage's services read only their own BAPC Secrets environment (App Hosting refuses others), run on their own network, and get per-deployment secret names. Each Cheisgos cluster sees only its own backups, passphrase and superuser password (both stored in BAPC Secrets). Device CA: own CA per stage from BAPC Secrets, only the API, portal and gRPC receive it (checked in the running containers); the only certificate the development CA issued expired on 17 Oct.
 - HTTPS only, secure cookies, CSRF checks; rate limits on sign-in and public endpoints.
 - Privacy policy, terms and cookie notice are on the site; account page offers Download my data and Close my account.
 
@@ -46,7 +46,7 @@ Checked against `bapc-cloud-and-deploy/docs/ENTERPRISE-STANDARD.md`. A box passe
 - Logs: structured JSON from every container in the server journal.
 - Analytics: daily usage totals to the Warehouse (confirmed sent tonight).
 - Hosting: BAPC App Hosting on vpn.bapc.app and vpn.bapc-headquarters.com.
-- One-step release with rollback: `deploy/hosting/build-image.sh` then `release.mjs`; App Hosting rolls a failed rollout back on its own. Releases today: 9dbaf68, 5ff9c46 (production), 0dc2ee4 and e609259 (staging). A release currently pauses the WireGuard gateway sync for about a minute while the API is replaced; App Hosting 1bb9806 fixes it (removes the old container before starting the new one) and waits for the owner's OK to install.
+- One-step release with rollback: `deploy/hosting/build-image.sh` then `release.mjs`; App Hosting rolls a failed rollout back on its own. Releases today: 9dbaf68, 5ff9c46, e609259 (production; staging first each time). App Hosting 1bb9806 removes the old container before starting the new one: the e609259 release paused the WireGuard gateway sync for one 10-second retry instead of a minute.
 - Admin dashboard: vpn.bapc.app/admin. Support: BAPC Help Desk (support.bapc.app).
 - Documentation: `docs/PRODUCTION.md`, `deploy/hosting/README.md`, user help at vpn.bapc.app/help.
 
