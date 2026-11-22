@@ -44,8 +44,9 @@ DIGEST=$(cat "$DIGESTFILE")
 
 log "3/4 checking the Registry has it, with its signature"
 set -a; . "$ETC/registry-client.env"; set +a
-TOKEN=$(curl -fsS https://bapc.app/oauth/token -d grant_type=client_credentials --data-urlencode "client_id=$REGISTRY_CLIENT_ID" \
-  --data-urlencode "client_secret=$REGISTRY_CLIENT_SECRET" -d audience=bapc-registry -d 'scope=registry:pull registry:promote' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).access_token||""))')
+# The client secret goes in on standard input (printf is a shell builtin), never on curl's command line.
+TOKEN=$(printf '%s' "$REGISTRY_CLIENT_SECRET" | curl -fsS https://bapc.app/oauth/token -d grant_type=client_credentials --data-urlencode "client_id=$REGISTRY_CLIENT_ID" \
+  --data-urlencode "client_secret@-" -d audience=bapc-registry -d 'scope=registry:pull registry:promote' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).access_token||""))')
 [ -n "$TOKEN" ] || { log "BAPC Login gave no token for the registry client"; exit 1; }
 ART=$(curl -fsS -H "authorization: Bearer $TOKEN" "https://registry.bapc.app/api/v1/artifacts/$DIGEST")
 echo "$ART" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s);const sig=a.signature??a.artifact?.signature;console.error("registry: "+JSON.stringify({status:a.status??a.artifact?.status,signature:sig?.status??sig??null}))})'

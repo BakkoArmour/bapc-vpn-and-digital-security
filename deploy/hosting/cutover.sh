@@ -74,9 +74,12 @@ else
   log "2/5 stopping the systemd staging copy"
   systemctl stop bapc-vpn@staging.target
   STOPPED=1
+  # The old URL's password goes to PGPASSWORD, so it never appears on pg_dump's or psql's command line.
   OLD_URL=$(grep -E '^DATABASE_URL=' /etc/bapc-vpn/staging.env | cut -d= -f2-)
-  ( unset PGPASSWORD PGOPTIONS; pg_dump --dbname="$OLD_URL" --format=custom --no-owner --no-privileges ) > "$WORK/db.dump"
-  OLD_COUNTS=$( unset PGPASSWORD PGOPTIONS; psql "$OLD_URL" -qtAc "$COUNTS" )
+  OLD_PW=$(printf '%s' "$OLD_URL" | sed -E 's#^[a-z]+://[^:/]+:([^@]*)@.*#\1#')
+  OLD_NOPW=$(printf '%s' "$OLD_URL" | sed -E 's#^([a-z]+://[^:/]+):[^@]*@#\1@#')
+  ( unset PGOPTIONS; PGPASSWORD="$OLD_PW" pg_dump --dbname="$OLD_NOPW" --format=custom --no-owner --no-privileges ) > "$WORK/db.dump"
+  OLD_COUNTS=$( unset PGOPTIONS; PGPASSWORD="$OLD_PW" psql "$OLD_NOPW" -qtAc "$COUNTS" )
 fi
 [ -s "$WORK/db.dump" ] || die "the dump is empty"
 
