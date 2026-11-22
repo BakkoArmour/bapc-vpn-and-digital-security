@@ -1,4 +1,6 @@
 import {KMSClient} from "@aws-sdk/client-kms";
+import {X509Certificate,createPublicKey} from "node:crypto";
+import {VaultKeyProvider} from "./vault-key-provider.js";
 import {DevKeyProvider} from "./dev-key-provider.js";
 import {AwsKmsKeyProvider} from "./aws-kms-key-provider.js";
 import {selfSignWithExistingKey, createSelfSignedDevCa} from "./dev-self-signed.js";
@@ -11,7 +13,7 @@ export interface TrustAnchor {
   issuerId:string;
   certificatePem:string;
   algorithm:"RS256";
-  mode:"aws-kms"|"development-shared-ca";
+  mode:"bapc-secrets"|"aws-kms"|"development-shared-ca";
 }
 
 // certificates.issuer_id is a real foreign key into certificate_issuers (see
@@ -47,7 +49,30 @@ export const upsertIssuerRow=async(db:PgQueryable,certificatePem:string,keyRefer
 // exists yet, not a stub. Both production-server.ts (CRL + threat-response
 // certificate issuance) and grpc-server.ts (enrollment) call this so they
 // always share one issuer identity.
+/** Checks a device CA from BAPC Secrets before anything is signed with it: a CA certificate, in date, for this key. */
+export const checkDeviceCa=(certificatePem:string,publicKeyPem:string,now=new Date()):X509Certificate=>{
+  let cert:X509Certificate;
+  try{cert=new X509Certificate(certificatePem);}catch{throw new Error("TRUST_CA_CERT_PEM is not a readable certificate");}
+  if(!cert.ca)throw new Error("TRUST_CA_CERT_PEM is not a CA certificate");
+  if(new Date(cert.validFrom)>now||new Date(cert.validTo)<now)throw new Error(`the device CA certificate is not valid now (${cert.validFrom} to ${cert.validTo})`);
+  const certKey=cert.publicKey.export({type:"spki",format:"der"});
+  const ourKey=createPublicKey(publicKeyPem).export({type:"spki",format:"der"});
+  if(!certKey.equals(ourKey))throw new Error("TRUST_CA_CERT_PEM does not belong to TRUST_CA_KEY_PEM");
+  return cert;
+};
+
 export const loadTrustAnchor=async(db:PgQueryable,env:NodeJS.ProcessEnv=process.env):Promise<TrustAnchor>=>{
+  // Production: the device CA held in BAPC Secrets & Key Management (made with make-device-ca, see docs/PRODUCTION.md).
+  const caKey=env.TRUST_CA_KEY_PEM, caCert=env.TRUST_CA_CERT_PEM;
+  if(caKey||caCert){
+    if(!caKey||!caCert)throw new Error("TRUST_CA_KEY_PEM and TRUST_CA_CERT_PEM must both be set");
+    const keyReference="device-ca";
+    const keys=new VaultKeyProvider({[keyReference]:caKey});
+    const cert=checkDeviceCa(caCert,await keys.publicKey(keyReference));
+    const issuerId=await upsertIssuerRow(db,caCert,"bapc-secrets:device-ca");
+    console.log(JSON.stringify({event:"trust_core.mode",mode:"bapc-secrets",subject:cert.subject,validTo:cert.validTo,fingerprint256:cert.fingerprint256}));
+    return {keys,keyReference,issuerId,certificatePem:caCert,algorithm:"RS256",mode:"bapc-secrets"};
+  }
   const kmsKeyId=env.AWS_KMS_INTERMEDIATE_KEY_ID;
   if(kmsKeyId){
     const client=new KMSClient(env.AWS_REGION?{region:env.AWS_REGION}:{});
@@ -58,10 +83,9 @@ export const loadTrustAnchor=async(db:PgQueryable,env:NodeJS.ProcessEnv=process.
     return {keys,keyReference:"intermediate",issuerId,certificatePem,algorithm:"RS256",mode:"aws-kms"};
   }
 
-  console.log(JSON.stringify({
-    event:"trust_core.mode",mode:"development-shared-ca",
-    reason:"AWS_KMS_INTERMEDIATE_KEY_ID not set — coming soon: set it (plus AWS_REGION and IAM credentials) to sign with a real AWS KMS-backed key instead of an ephemeral development CA"
-  }));
+  // A development CA (its key in the database) is for development and tests only; production refuses to start on it.
+  if(env.NODE_ENV==="production")throw new Error("production needs its device CA from BAPC Secrets (TRUST_CA_KEY_PEM and TRUST_CA_CERT_PEM): it does not run on the development CA");
+  console.log(JSON.stringify({event:"trust_core.mode",mode:"development-shared-ca",reason:"development only: no TRUST_CA_KEY_PEM/TRUST_CA_CERT_PEM set"}));
   const store=new PgDevTrustAnchorStore(db);
   const keyReference="trust-anchor";
   // Keep this ASCII and comma-free: node-forge's DN encoding doesn't

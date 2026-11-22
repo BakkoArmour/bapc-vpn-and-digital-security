@@ -33,6 +33,10 @@ test('specs: nine services from one digest, fixed loopback ports per stage, no s
   assert.ok(vpnApps({ digest: D, stage: 'production', release: 'x', node: 'n', optional: { portal: true } })[1].spec.secrets.some((s) => s.name === 'BAPC_BILLING_KEY'));
   assert.throws(() => vpnApps({ digest: 'latest', stage: 'production', release: 'x', node: 'n' }), /digest/);
   assert.ok(requiredSecrets('production').includes('bapc-vpn-prod/PG_VPN_CORE_BAPC_VPN_RW_PASSWORD'));
+  // The device CA goes only to the three services that sign certificates.
+  const withCa = prod.filter((x) => x.spec.secrets?.some((s) => s.name === 'TRUST_CA_KEY_PEM')).map((x) => x.slug).sort();
+  assert.deepEqual(withCa, ['vpn-api', 'vpn-grpc', 'vpn-portal']);
+  assert.ok(requiredSecrets('staging').includes('bapc-vpn-staging/TRUST_CA_CERT_PEM'));
   assert.ok(requiredSecrets('staging', { agents: true }).includes('bapc-vpn-staging/RELAY_AGENT_TOKEN'));
 });
 

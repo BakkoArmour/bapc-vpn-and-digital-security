@@ -31,8 +31,8 @@ Files: [apps.mjs](apps.mjs) (the nine specs), [release.mjs](release.mjs) (ships 
    `/etc/containers/registries.d/registry.bapc.app.yaml`: `docker: {registry.bapc.app: {use-sigstore-attachments: true}}`.
 5. **App Hosting**: project `bapc-vpn` (owner app `bapc-vpn`), cluster `bapc-vpn` (runtime podman, stages staging and
    production), environment quotas of at least 2.5 GiB memory and 6 CPU each. Add the agent, then on the machine:
-   `NODE=bapc-vpn AGENT_ID=agt_… SELF_V4=116.203.78.222 SELF_V6=2a01:4f8:1c1a:1f97::/64 LOOPBACK_TCP=15432,15433 bash agent/machine/install.sh`
-   (from bapc-app-hosting). Put the read-only keys in `/etc/bapc-host/secrets-keys/<environment>.key`. Watch it a day
+   `NODE=bapc-vpn AGENT_ID=agt_… SELF_V4=116.203.78.222 SELF_V6=2a01:4f8:1c1a:1f97::/64 LOOPBACK_TCP=55432,55433 bash agent/machine/install.sh`
+   (from bapc-app-hosting). Put the read-only keys in `/etc/bapc-host/credentials/secrets/<environment>.key` (root only, mode 600; systemd hands them to the agent). Watch it a day
    in observe mode, then switch it to apply. *Owner's yes: server change, apply mode.*
 6. **Cheisgos**: enroll the machine's agent (with `vault` → `{"bapc-vpn/production": "bapc-vpn-prod", "bapc-vpn/staging": "bapc-vpn-staging"}`
    and the write keys), clusters `vpn-core` (port 15432) and `vpn-staging` (15433), database `bapc_vpn` in each, roles

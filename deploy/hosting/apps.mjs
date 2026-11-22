@@ -21,6 +21,8 @@ const PORTS = { api: 8080, portal: 8095, grpc: 50051, oob: 8181, console: 8090, 
 
 const CORE_SECRETS = ['CONTROL_API_TOKEN_SECRET', 'EVENT_SIGNING_SECRET', 'OOB_SHARED_SECRET', 'DIAGNOSTICS_SHARED_SECRET',
   'HEADQUARTERS_SHARED_SECRET', 'CLOUD_DEPLOYMENT_SHARED_SECRET', 'INTEGRATION_SHARED_SECRET'];
+// The device CA (made with make-device-ca): only the three services that sign certificates get it.
+const CA_SECRETS = ['TRUST_CA_KEY_PEM', 'TRUST_CA_CERT_PEM'];
 
 /**
  * @param {{ digest: string, stage: 'production'|'staging', release: string, node: string,
@@ -54,6 +56,7 @@ export function vpnApps(o) {
     ...pick(['OBOP_SYSTEM_ID']),
   };
   const baseSecrets = [sec('PGPASSWORD', st.db.rwRef), ...CORE_SECRETS.map((n) => sec(n)), ...(opt.obop ? [sec('OBOP_INGEST_TOKEN')] : [])];
+  const caSecrets = CA_SECRETS.map((n) => sec(n));
   const gateway = pick(['VPN_GATEWAY_PUBLIC_KEY', 'VPN_GATEWAY_ENDPOINT', 'VPN_CLIENT_DNS']);
   const common = { artifact: { imageDigest: o.digest, signed: true }, rollout: { strategy: 'recreate', autoRollback: true }, placement: { node: o.node } };
   const app = (slug, name, workload, spec) => ({ slug, name, workload, spec: { ...common, ...spec } });
@@ -67,17 +70,17 @@ export function vpnApps(o) {
       runtime: { type: 'http', port: PORTS.api, replicas: 1, command: ['sh', '-c',
         `PGUSER=${st.db.migrator} PGPASSWORD="$PG_MIGRATOR_PASSWORD" PG_RUNTIME_ROLE=${st.db.user} PGOPTIONS="-c role=${st.db.name}_owner" node dist/src/runtime/migrate-cli.js db up && unset PG_MIGRATOR_PASSWORD && exec node dist/src/runtime/production-server.js`] },
       resources: res('1', '384Mi'), health: { readiness: '/healthz', liveness: '/healthz', startupSeconds: 120 }, network: net('api'),
-      env: { ...baseEnv, ...gateway, BIND_HOST: '0.0.0.0', PORT: String(PORTS.api), OOB_CONTROLLER_URL: `http://vpn-oob:${PORTS.oob}` }, secrets: [...baseSecrets, sec('PG_MIGRATOR_PASSWORD', st.db.migratorSecret)],
+      env: { ...baseEnv, ...gateway, BIND_HOST: '0.0.0.0', PORT: String(PORTS.api), OOB_CONTROLLER_URL: `http://vpn-oob:${PORTS.oob}` }, secrets: [...baseSecrets, ...caSecrets, sec('PG_MIGRATOR_PASSWORD', st.db.migratorSecret)],
     }),
     app('vpn-portal', 'BAPC VPN customer portal', 'http', {
       runtime: { type: 'http', port: PORTS.portal, replicas: 1, command: node('customer-portal.js') },
       resources: res('1', '384Mi'), health: { readiness: '/healthz', liveness: '/healthz', startupSeconds: 60 }, network: net('portal'),
       env: { ...baseEnv, ...gateway, PORTAL_BIND_HOST: '0.0.0.0', PORTAL_PORT: String(PORTS.portal), PORTAL_PUBLIC_ORIGIN: st.origin, BAPC_IDENTITY_URL: 'https://bapc.app', BAPC_BILLING_URL: 'https://billing.bapc.app' },
-      secrets: [...baseSecrets, ...(opt.portal ? ['BAPC_CLIENT_SECRET', 'BAPC_BILLING_KEY', 'BAPC_BILLING_HOOK_SECRET', 'BAPC_NOTIFICATIONS_KEY'].map((n) => sec(n)) : [])],
+      secrets: [...baseSecrets, ...caSecrets, ...(opt.portal ? ['BAPC_CLIENT_SECRET', 'BAPC_BILLING_KEY', 'BAPC_BILLING_HOOK_SECRET', 'BAPC_NOTIFICATIONS_KEY'].map((n) => sec(n)) : [])],
     }),
     app('vpn-grpc', 'BAPC VPN mesh gRPC', 'worker', {
       runtime: { type: 'worker', replicas: 1, command: node('grpc-server.js') }, resources: res('500m', '256Mi'), network: net('grpc'),
-      env: { ...baseEnv, BIND_HOST: '0.0.0.0', GRPC_PORT: String(PORTS.grpc) }, secrets: baseSecrets,
+      env: { ...baseEnv, BIND_HOST: '0.0.0.0', GRPC_PORT: String(PORTS.grpc) }, secrets: [...baseSecrets, ...caSecrets],
     }),
     app('vpn-oob', 'BAPC VPN out-of-band controller', 'worker', {
       runtime: { type: 'worker', replicas: 1, command: node('oob-server.js') }, resources: res('500m', '192Mi'), network: net('oob'),
@@ -115,7 +118,7 @@ export function vpnApps(o) {
 /** The BAPC Secrets names one stage needs (what to put in BAPC Secrets before the first release). */
 export function requiredSecrets(stage, optional = {}) {
   const st = STAGES[stage];
-  const names = new Set([st.db.rwRef, st.db.migratorSecret, ...CORE_SECRETS]);
+  const names = new Set([st.db.rwRef, st.db.migratorSecret, ...CORE_SECRETS, ...CA_SECRETS]);
   if (optional.obop) names.add('OBOP_INGEST_TOKEN');
   if (optional.portal) for (const n of ['BAPC_CLIENT_SECRET', 'BAPC_BILLING_KEY', 'BAPC_BILLING_HOOK_SECRET', 'BAPC_NOTIFICATIONS_KEY']) names.add(n);
   if (optional.warehouse) names.add('WAREHOUSE_SIGNING_SECRET');
