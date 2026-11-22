@@ -54,7 +54,7 @@ After a release that changes plans: `docker compose exec customer-portal node di
 | BAPC_BILLING_HOOK_SECRET | Verifies Billing's `plan.changed` hook | BAPC Billing (`app_hooks`) |
 | BAPC_NOTIFICATIONS_KEY | Customer email, app `bapc-vpn`, from no-reply@bapc.app | BAPC Notifications (hash only) |
 | WAREHOUSE_URL, WAREHOUSE_SOURCE_ID, WAREHOUSE_SIGNING_SECRET | Daily usage totals | Warehouse Worker secret `WAREHOUSE_SECRET_BAPC_VPN_FEED` |
-| OBOP_INGEST_TOKEN, OBOP_SYSTEM_ID | Error reporting to BAPC Observability. **Not set yet** (owner issues the token). | BAPC Observability |
+| OBOP_INGEST_TOKEN, OBOP_SYSTEM_ID | Error reporting to BAPC Observability: system `bapc-sys-06` (in `/etc/bapc-vpn/hosting-production.json`, `optional.obop: true`), token in BAPC Secrets `bapc-vpn-prod` (90 days, expires 20 Feb 2027; rotate in observe.bapc.app → Administration → Ingestion tokens). Live since 22 Nov 2026 21:24 UTC. | BAPC Observability |
 | RELAY_AGENT_TOKEN, EGRESS_AGENT_TOKEN | Relay/egress self-registration | none |
 
 Every change to `.env` is preceded by a dated copy (`.env.bak-<stamp>`). After changing it: `docker compose up -d --no-build`.
@@ -74,7 +74,7 @@ Every change to `.env` is preceded by a dated copy (`.env.bak-<stamp>`). After c
 | What | Where |
 |---|---|
 | Uptime | status.bapc.app: `vpn` (customer site) and `vpn-control` (control plane), every 5 min; 2 failures in a row open an incident. |
-| Errors and crashes | Every service reports error log lines and crashes to BAPC Observability once `OBOP_*` is set (src/infrastructure/error-reporting.ts). Until then they are in `docker logs`. |
+| Errors and crashes | Every service reports error log lines and crashes to BAPC Observability (src/infrastructure/error-reporting.ts); an error opens the console-only alert "BAPC VPN & Digital Security: errors reported" on observe.bapc.app. Production only; staging is not connected. |
 | Usage | maintenance-worker sends yesterday's `activity.daily` totals (active_users, signups, sign_ins, onboarded) to the Warehouse every 6 h; seen in BAPC Analytics. |
 | Logs | `docker compose logs <service>` (structured JSON), `journalctl -u bapc-gateway-sync`, `journalctl -u bapc-vpn-backup`. |
 

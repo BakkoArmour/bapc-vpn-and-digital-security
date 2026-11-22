@@ -1,9 +1,9 @@
 # BAPC VPN: Enterprise Standard completion report
 
 22 Nov 2026, after production moved onto BAPC infrastructure (App Hosting + Cheisgos + Secrets + Registry + Backup);
-re-checked 07:30 UTC the same day after the security-review fixes; production device CA live 07:55 UTC.
+re-checked 07:30 UTC the same day after the security-review fixes; production device CA live 07:55 UTC; error alerts live 21:27 UTC.
 Checked against `bapc-cloud-and-deploy/docs/ENTERPRISE-STANDARD.md`. A box passes only on evidence (Part 2).
-**Verdict: not done.** Two sections are Partial; each needs something only the owner can do or approve.
+**Verdict: not done.** One section is Partial (Payments); both missing items need the owner.
 
 | Section | Pass / Partial / Fail | What's missing | Plan to fix |
 |---|---|---|---|
@@ -11,7 +11,7 @@ Checked against `bapc-cloud-and-deploy/docs/ENTERPRISE-STANDARD.md`. A box passe
 | Data, reliability and backups | **Pass** | Nothing required. Worth doing: a point-in-time restore rehearsal on the Cheisgos cluster (the nightly logical backup is restore-tested every night already). | Run the Cheisgos Recovery rehearsal into an isolated copy. |
 | Payments and commerce | **Partial** | 1. A real purchase and refund has never been run end to end on the live site. 2. EU/UK consumer VAT: registration not done, so Billing rule 6 is deployed but switched off. | 1. Owner buys and refunds a plan (5 minutes). 2. Register for EU OSS and UK VAT, enter the numbers in Billing and Stripe, switch rule 6 on. |
 | Quality | **Pass** | Nothing required. Live accessibility check on 22 Nov (below) found one heading-order issue, fixed in 85a30df. A person-run NVDA or VoiceOver pass is still worth doing. | — |
-| Operations | **Partial** | Error tracking does not alert yet. The VPN is wired to BAPC Observability (it only needs `OBOP_SYSTEM_ID` and `OBOP_INGEST_TOKEN`), but the token can't be issued: the saved Observability owner database password is out of date, and the VPN's official BAPC number for its slot is not recorded anywhere (the tooling says never guess it). Errors are in the server journal until then. | Owner: give the VPN's number (an infrastructure number 1 to 60, or the next app number, 102) and a current Observability owner connection string; then `connect-app` issues the token, it goes into BAPC Secrets `bapc-vpn-prod`, and a release turns alerts on. |
+| Operations | **Pass** | Nothing required. Error alerts are live: BAPC Observability system #6 "BAPC VPN & Digital Security" (bapc-sys-06, service `web`, health check https://vpn.bapc.app/healthz), rule "BAPC VPN & Digital Security: errors reported" (1 error in 5 minutes, console-only policy). The ingestion token (90 days, expires 20 Feb 2027) is in BAPC Secrets `bapc-vpn-prod` as `OBOP_INGEST_TOKEN`; release 85a30df re-run at 21:24 UTC with it. A test error sent from the live control API opened the alert at 21:27 UTC. | Rotate the token before 20 Feb 2027 (Observability sends an in-app reminder 14 days before). |
 
 ## Evidence (22 Nov 2026)
 
@@ -53,7 +53,8 @@ Checked against `bapc-cloud-and-deploy/docs/ENTERPRISE-STANDARD.md`. A box passe
 
 ## Also open (not Enterprise Standard items)
 
-- bapc.app's directory still lists BAPC VPN as "dev" with no address, so visitors can't find it and the outside audit scan skips it. Listing it is a public launch decision for the owner.
+- Listed as live on bapc.app (infrastructure #6, https://vpn.bapc.app) on 22 Nov at the owner's yes (bapc-app `app-turnstile` 7a1176a, deployed).
+- Observability console bug: its Registry page reads the wrong field names (shows "undefined. undefined" and can't add a service), so slot #6 was set up through its own API from the signed-in console. Report to the Observability owner.
 - The stopped Docker stack is kept as a fallback; remove it after a quiet week, with the owner's yes.
 - Merge the Code Adytum branches: `vpn/launch-readiness`, `host-vpn-ready`, `sql-vault-link`, `backup-bapc-vpn`, `billing-eu-uk-vat`, `vpn-feed`, `status-bapc-vpn`.
 - A pen test. Stronger later: a signing service in BAPC Secrets so the device CA key never leaves it (today it is held in BAPC Secrets and loaded into memory).
