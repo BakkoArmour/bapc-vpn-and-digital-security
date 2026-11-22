@@ -21,14 +21,16 @@ import { vpnApps } from './apps.mjs';
 export const REPOSITORY = 'bapc-vpn/core';
 const DONE = new Set(['ready', 'failed', 'rolled_back', 'rejected', 'cancelled', 'superseded']);
 
-export function client({ url, token, fetchFn = fetch }) {
-  return async (method, path, body) => {
+/** API client. `refresh` gets a new token when one expires (they last 10 minutes; a production approval can take longer). */
+export function client({ url, token, fetchFn = fetch, refresh }) {
+  return async function call(method, path, body, retried = false) {
     const headers = { authorization: `Bearer ${token}`, accept: 'application/json' };
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (method === 'POST') headers['idempotency-key'] = randomUUID();
     const r = await fetchFn(`${url}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await r.text();
     let json; try { json = JSON.parse(text); } catch { json = { raw: text.slice(0, 300) }; }
+    if (r.status === 401 && refresh && !retried) { token = await refresh(); return call(method, path, body, true); }
     if (!r.ok && !(r.status === 422 && json.deployment)) throw new Error(`${method} ${path} answered ${r.status}: ${text.slice(0, 300)}`);
     return json;
   };
@@ -67,10 +69,17 @@ export async function release({ api, origin, stage, digest, releaseId, settings,
   const ship = async (a) => {
     const rev = await api('POST', `/v1/apps/${ids.get(a.slug)}/revisions`, { spec: a.spec, provenance: { commit: releaseId, source: 'deploy/hosting/release.mjs' } });
     if (rev.admission?.decision === 'deny') throw new Error(`${a.slug}: revision refused: ${rev.admission.checks.filter((c) => !c.ok && c.level === 'block').map((c) => c.message).join(' ')}`);
-    const r = await api('POST', `/v1/apps/${ids.get(a.slug)}/deployments`, { environment: stage, revision_id: rev.revision.id, reason: `BAPC VPN release ${releaseId}` });
-    if (r.deployment.state === 'rejected') throw new Error(`${a.slug}: deployment refused: ${r.deployment.state_reason}`);
-    log(`${a.slug}: revision ${rev.revision.seq}, deployment ${r.deployment.id} (${r.deployment.state})`);
-    const d = await waitFor(api, { id: r.deployment.id, slug: a.slug }, { log, origin, timeoutMs, sleep });
+    // Already running this revision here: nothing to do. A request for it already waiting or rolling out: follow that one.
+    const live = ((await api('GET', `/v1/apps/${ids.get(a.slug)}`)).deployments ?? []).filter((x) => x.environment === stage && x.revision?.id === rev.revision.id);
+    if (live.some((x) => x.state === 'ready')) { log(`${a.slug}: already running revision ${rev.revision.seq}`); return { state: 'ready' }; }
+    let dep = live.find((x) => ['awaiting_approval', 'approved', 'scheduled', 'rolling_out'].includes(x.state));
+    if (!dep) {
+      const r = await api('POST', `/v1/apps/${ids.get(a.slug)}/deployments`, { environment: stage, revision_id: rev.revision.id, reason: `BAPC VPN release ${releaseId}` });
+      if (r.deployment.state === 'rejected') throw new Error(`${a.slug}: deployment refused: ${r.deployment.state_reason}`);
+      dep = r.deployment;
+    }
+    log(`${a.slug}: revision ${rev.revision.seq}, deployment ${dep.id} (${dep.state})`);
+    const d = await waitFor(api, { id: dep.id, slug: a.slug }, { log, origin, timeoutMs, sleep });
     if (d.state !== 'ready') throw new Error(`${a.slug}: ${d.state}${d.state_reason ? `: ${d.state_reason}` : ''}`);
     log(`${a.slug}: ready`);
     return d;
@@ -92,6 +101,7 @@ async function main() {
   if (!settings.project_id) throw new Error('settings need project_id (App Hosting project of BAPC VPN)');
   const origin = String(arg('url', 'https://host.bapc.app')).replace(/\/+$/, '');
   const token = await serviceToken({ id: process.env.HOST_CLIENT_ID ?? '', secret: process.env.HOST_CLIENT_SECRET ?? '' });
-  await release({ api: client({ url: origin, token }), origin, stage, digest, releaseId, settings, timeoutMs: Number(arg('timeout', '1800')) * 1000 });
+  const refresh = () => serviceToken({ id: process.env.HOST_CLIENT_ID ?? '', secret: process.env.HOST_CLIENT_SECRET ?? '' });
+  await release({ api: client({ url: origin, token, refresh }), origin, stage, digest, releaseId, settings, timeoutMs: Number(arg('timeout', '1800')) * 1000 });
 }
 if (process.argv[1]?.endsWith('release.mjs')) main().catch((e) => { console.error(e.message); process.exit(1); });

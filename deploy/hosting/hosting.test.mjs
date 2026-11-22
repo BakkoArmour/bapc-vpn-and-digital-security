@@ -45,11 +45,12 @@ function fakeHost({ failSlug, approval = false } = {}) {
     if (method === 'GET' && path.startsWith('/v1/apps?')) return { apps };
     if (method === 'POST' && path === '/v1/apps') { const a = { id: `app_${body.slug}`, slug: body.slug, workload_type: body.workload_type }; apps.push(a); return { app: a }; }
     let m;
+    if (method === 'GET' && (m = path.match(/^\/v1\/apps\/([^/?]+)$/))) return { deployments: [...deps.values()].filter((d) => d.app === m[1] && d.state === 'ready').map((d) => ({ id: d.id, environment: 'staging', state: 'ready', revision: { id: `rev_${m[1]}` } })) };
     if (method === 'POST' && (m = path.match(/^\/v1\/apps\/(.+)\/revisions$/))) return { revision: { id: `rev_${m[1]}`, seq: 1 }, admission: { decision: 'allow', checks: [] } };
     if (method === 'POST' && (m = path.match(/^\/v1\/apps\/(.+)\/deployments$/))) {
       const slug = apps.find((a) => a.id === m[1]).slug;
       order.push(slug);
-      const d = { id: `dep_${++n}`, slug, polls: 0, state: approval ? 'awaiting_approval' : 'scheduled' };
+      const d = { id: `dep_${++n}`, slug, app: m[1], polls: 0, state: approval ? 'awaiting_approval' : 'scheduled' };
       deps.set(d.id, d);
       return { deployment: { id: d.id, state: d.state } };
     }
@@ -89,4 +90,19 @@ test('release: production announces the approval wait; a rolled-back service fai
   const apiFails = fakeHost({ failSlug: 'vpn-api' });
   await assert.rejects(release({ api: apiFails.api, origin: 'o', stage: 'staging', digest: D, releaseId: 'abc1234', settings: SETTINGS, log: quiet, sleep: noSleep }), /vpn-api: rolled_back/);
   assert.deepEqual(apiFails.order, ['vpn-api']);   // nothing else is shipped when the API (migrations) fails
+});
+
+test('release: an expired token is renewed once; services already on the revision are not restarted', async () => {
+  const { client } = await import('./release.mjs');
+  let tok = 'old', calls = 0;
+  const fetchFn = async (_u, init) => { calls++; return init.headers.authorization === 'Bearer old' ? new Response('{"error":{"message":"token expired"}}', { status: 401 }) : new Response('{"ok":true}', { status: 200 }); };
+  const api = client({ url: 'https://h', token: tok, fetchFn, refresh: async () => 'new' });
+  assert.deepEqual(await api('GET', '/x'), { ok: true });
+  assert.equal(calls, 2);
+  const h = fakeHost();
+  await release({ api: h.api, origin: 'o', stage: 'staging', digest: D, releaseId: 'abc1234', settings: SETTINGS, log: quiet, sleep: noSleep });
+  const again = [];
+  await release({ api: h.api, origin: 'o', stage: 'staging', digest: D, releaseId: 'abc1234', settings: SETTINGS, log: (l) => again.push(l), sleep: noSleep });
+  assert.equal(h.order.length, 9);   // the second run requested nothing new
+  assert.ok(again.filter((l) => /already running/.test(l)).length === 9);
 });
