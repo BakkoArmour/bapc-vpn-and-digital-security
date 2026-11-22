@@ -43,7 +43,9 @@ export function vpnApps(o) {
   const sec = (envName, name = envName) => ({ name: envName, secretRef: ref(name) });
   const port = (k) => PORTS[k] + st.zonePortOffset;
   const net = (k, protocol = 'tcp') => ({ egressPolicy: 'restricted', ports: [{ containerPort: PORTS[k], hostPort: port(k), protocol }], aliases: [`vpn-${k}`] });
-  const res = (cpu, mem) => ({ cpuRequest: '100m', cpuLimit: cpu, memoryRequest: '96Mi', memoryLimit: mem });
+  // Requests are what App Hosting reserves on the machine (2 cores for 18 services, plus a second copy during a rollout);
+  // these services idle at a few percent. Limits stay generous.
+  const res = (cpu, mem) => ({ cpuRequest: '50m', cpuLimit: cpu, memoryRequest: '96Mi', memoryLimit: mem });
   const pick = (keys) => Object.fromEntries(keys.filter((k) => pub[k] !== undefined && pub[k] !== '').map((k) => [k, String(pub[k])]));
 
   const baseEnv = {
