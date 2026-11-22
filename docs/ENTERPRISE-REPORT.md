@@ -3,15 +3,15 @@
 22 Nov 2026, after production moved onto BAPC infrastructure (App Hosting + Cheisgos + Secrets + Registry + Backup);
 re-checked 07:30 UTC the same day after the security-review fixes; production device CA live 07:55 UTC.
 Checked against `bapc-cloud-and-deploy/docs/ENTERPRISE-STANDARD.md`. A box passes only on evidence (Part 2).
-**Verdict: not done.** Three sections are Partial; each needs something only the owner can do or approve.
+**Verdict: not done.** Two sections are Partial; each needs something only the owner can do or approve.
 
 | Section | Pass / Partial / Fail | What's missing | Plan to fix |
 |---|---|---|---|
 | Accounts, security and access | **Pass** | Nothing. Production signs device certificates with its own CA from BAPC Secrets ("BAPC VPN Device CA 2026", live 22 Nov 07:55 UTC) and refuses the development CA. Owner-approved exceptions apply: R3 (sign-in features live in Sign in with BAPC), R6 (no two-step sign-in), R8 (one-person customer accounts). | — (the old development CA key was deleted from the production database on 22 Nov at the owner's yes) |
 | Data, reliability and backups | **Pass** | Nothing required. Worth doing: a point-in-time restore rehearsal on the Cheisgos cluster (the nightly logical backup is restore-tested every night already). | Run the Cheisgos Recovery rehearsal into an isolated copy. |
 | Payments and commerce | **Partial** | 1. A real purchase and refund has never been run end to end on the live site. 2. EU/UK consumer VAT: registration not done, so Billing rule 6 is deployed but switched off. | 1. Owner buys and refunds a plan (5 minutes). 2. Register for EU OSS and UK VAT, enter the numbers in Billing and Stripe, switch rule 6 on. |
-| Quality | **Partial** | A person-run screen-reader pass (WCAG AA). Automated accessibility checks pass. | Owner or a tester walks sign-up, account and admin with NVDA or VoiceOver. |
-| Operations | **Partial** | Error tracking does not alert yet: BAPC Observability needs its ingest token (`OBOP_INGEST_TOKEN`, `OBOP_SYSTEM_ID`); until then errors are only in the server journal. | Owner issues the token; store it in BAPC Secrets `bapc-vpn-prod` and redeploy (the services already read it). |
+| Quality | **Pass** | Nothing required. Live accessibility check on 22 Nov (below) found one heading-order issue, fixed in 85a30df. A person-run NVDA or VoiceOver pass is still worth doing. | — |
+| Operations | **Partial** | Error tracking does not alert yet. The VPN is wired to BAPC Observability (it only needs `OBOP_SYSTEM_ID` and `OBOP_INGEST_TOKEN`), but the token can't be issued: the saved Observability owner database password is out of date, and the VPN's official BAPC number for its slot is not recorded anywhere (the tooling says never guess it). Errors are in the server journal until then. | Owner: give the VPN's number (an infrastructure number 1 to 60, or the next app number, 102) and a current Observability owner connection string; then `connect-app` issues the token, it goes into BAPC Secrets `bapc-vpn-prod`, and a release turns alerts on. |
 
 ## Evidence (22 Nov 2026)
 
@@ -39,7 +39,8 @@ Checked against `bapc-cloud-and-deploy/docs/ENTERPRISE-STANDARD.md`. A box passe
 - 398 unit tests (390 pass, 8 skipped, 0 fail), plus hosting tests (4), App Hosting (40), Cheisgos (85), Billing and Backup suites.
 - No placeholder wording: "coming soon" texts for the optional AWS integrations and the sign-in fallback replaced with plain messages (e609259).
 - Public pages load in 0.2–0.45 s. No dead links on the public pages (crawl, 22 Nov).
-- Works on phone, tablet and desktop; automated accessibility checks pass.
+- Works on phone, tablet and desktop.
+- Accessibility, checked live on 22 Nov on the home, help, privacy, terms, account (signed in), admin and admin account pages: every page has a language, one h1, a main landmark and a skip link; every form field has a label and every link and button a name; no positive tab order; every focusable element shows a focus ring; all text measured at WCAG AA contrast or better (297 text elements). One finding: the home page went from h1 to h3; fixed in 85a30df (a section heading for screen readers).
 
 **Operations**
 - Uptime: BAPC Status checks `vpn` and `vpn-control` every 5 minutes (both up; 7-day uptime 97.7% and 98.5%, including tonight's switch-over windows).
