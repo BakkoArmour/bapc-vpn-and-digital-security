@@ -40,7 +40,7 @@ Checked against `bapc-cloud-and-deploy/docs/ENTERPRISE-STANDARD.md`. A box passe
 - No placeholder wording: "coming soon" texts for the optional AWS integrations and the sign-in fallback replaced with plain messages (e609259).
 - Public pages load in 0.2–0.45 s. No dead links on the public pages (crawl, 22 Nov).
 - Works on phone, tablet and desktop.
-- Accessibility, checked live on 22 Nov on the home, help, privacy, terms, account (signed in), admin and admin account pages: every page has a language, one h1, a main landmark and a skip link; every form field has a label and every link and button a name; no positive tab order; every focusable element shows a focus ring; all text measured at WCAG AA contrast or better (297 text elements). One finding: the home page went from h1 to h3; fixed in 85a30df (a section heading for screen readers).
+- Accessibility, checked live on 22 Nov on the home, help, privacy, terms, account (signed in), admin and admin account pages: every page has a language, one h1, a main landmark and a skip link; every form field has a label and every link and button a name; no positive tab order; every focusable element shows a focus ring; all text measured at WCAG AA contrast or better (297 text elements). One finding: the home page went from h1 to h3; fixed in 85a30df (a section heading for screen readers), live on production 22 Nov.
 
 **Operations**
 - Uptime: BAPC Status checks `vpn` and `vpn-control` every 5 minutes (both up; 7-day uptime 97.7% and 98.5%, including tonight's switch-over windows).
