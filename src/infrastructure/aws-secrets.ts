@@ -19,7 +19,7 @@ export const hydrateSecretsFromAws=async(env:NodeJS.ProcessEnv=process.env,clien
   if(!secretId){
     console.log(JSON.stringify({
       event:"secrets.mode",mode:"environment-variables",
-      reason:"AWS_SECRETS_MANAGER_SECRET_ID not set — coming soon: set it (plus AWS_REGION and IAM credentials) to load production secrets from AWS Secrets Manager instead"
+      reason:"secrets come in as environment variables (on BAPC App Hosting: from BAPC Secrets, as Podman secrets)"
     }));
     return;
   }

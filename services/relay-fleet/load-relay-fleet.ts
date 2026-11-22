@@ -15,7 +15,7 @@ export const loadRelayFleet=(env:NodeJS.ProcessEnv=process.env):RelayFleet|undef
   if(!amiId||!region){
     console.log(JSON.stringify({
       event:"relay_fleet.mode",mode:"manual-only",
-      reason:"AWS_RELAY_AMI_ID/AWS_RELAY_REGION not set — coming soon: set them (plus AWS credentials and a golden AMI, see docs/RELAY-FLEET-AMI.md) to provision relay fleet nodes on AWS EC2 directly from the SOC console"
+      reason:"relays are added by hand; automatic provisioning needs AWS_RELAY_AMI_ID and AWS_RELAY_REGION (docs/RELAY-FLEET-AMI.md)"
     }));
     return undefined;
   }

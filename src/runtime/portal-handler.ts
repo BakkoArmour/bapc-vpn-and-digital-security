@@ -193,7 +193,7 @@ export const createPortalHandler=(deps:PortalDeps)=>{
     // --- Sign in with BAPC ---
     if(method==="GET"&&path==="/auth/start"){
       limit("auth");
-      if(!deps.identity){send(res,503,messagePage("Sign-in is coming soon","Accounts open very shortly. Please check back soon."));return;}
+      if(!deps.identity){send(res,503,messagePage("Sign-in is unavailable","Sign-in is not set up on this server. Please try again later or contact support.bapc.app."));return;}
       const state=randomToken(),verifier=randomToken(48);
       await deps.sessions.saveSignIn(state,verifier,safeNext(url.searchParams.get("next")),new Date(Date.now()+10*60_000));
       redirect(res,deps.identity.authorizeUrl(redirectUri,state,verifier));

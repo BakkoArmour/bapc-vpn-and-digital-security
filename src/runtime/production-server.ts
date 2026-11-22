@@ -569,7 +569,7 @@ router.add("GET","/api/v1/relays",["security-read"],async()=>relayStore.list());
 // a clear 501 "coming soon" instead of crashing when no AWS account/AMI is
 // configured yet; the existing manually-inserted-relay path is unaffected.
 router.add("POST","/api/v1/relays/provision",["security-owner"],async({claims,body})=>{
-  if(!relayFleet)throw new HttpError(501,"AWS relay auto-provisioning is not configured yet — set AWS_RELAY_AMI_ID and AWS_RELAY_REGION (coming soon)","not_configured");
+  if(!relayFleet)throw new HttpError(501,"automatic relay provisioning is not set up on this deployment; relays are added by hand (docs/RELAY-FLEET-AMI.md)","not_configured");
   const region=String(body.region??relayFleet.region);
   const instanceType=String(body.instanceType??"t3.small");
   const instance=await relayFleet.provisioner.launch({region,instanceType});
@@ -580,7 +580,7 @@ router.add("POST","/api/v1/relays/provision",["security-owner"],async({claims,bo
 },{rateLimit:{limit:5,windowMs:60_000}});
 
 router.add("POST","/api/v1/relays/:id/terminate",["security-owner"],async({claims,params})=>{
-  if(!relayFleet)throw new HttpError(501,"AWS relay auto-provisioning is not configured yet — set AWS_RELAY_AMI_ID and AWS_RELAY_REGION (coming soon)","not_configured");
+  if(!relayFleet)throw new HttpError(501,"automatic relay provisioning is not set up on this deployment; relays are added by hand (docs/RELAY-FLEET-AMI.md)","not_configured");
   const relay=await relayStore.get(params.id!);
   if(!relay)throw new HttpError(404,"relay not found","not_found");
   if(!relay.instanceId)throw new HttpError(400,"this relay has no associated AWS instance to terminate — it was added manually","invalid_request");
