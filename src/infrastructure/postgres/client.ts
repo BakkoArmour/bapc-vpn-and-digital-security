@@ -12,6 +12,11 @@ export class Postgres {
       connectionTimeoutMillis:5_000,
       application_name:"bapc-vpn-digital-security"
     });
+    // A dropped idle connection (database restart, failover, endpoint switch) is logged and replaced on the next query.
+    // Without this listener Node treats it as an uncaught exception and the whole service exits.
+    this.pool.on("error",(error:Error)=>{
+      console.error(JSON.stringify({event:"postgres.idle_connection_lost",error:String(error?.message??error).slice(0,200)}));
+    });
   }
   async query<T extends pg.QueryResultRow=pg.QueryResultRow>(
     text:string, values:unknown[]=[]
