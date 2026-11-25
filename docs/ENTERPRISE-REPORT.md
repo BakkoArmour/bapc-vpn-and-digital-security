@@ -55,7 +55,7 @@ Checked against `bapc-cloud-and-deploy/docs/ENTERPRISE-STANDARD.md`. A box passe
 
 - Listed as live on bapc.app (infrastructure #6, https://vpn.bapc.app) on 22 Nov at the owner's yes (bapc-app `app-turnstile` 7a1176a, deployed).
 - Observability console Registry bug (showed "undefined. undefined", couldn't add a service): fixed on 22 Nov in bapc-observability `registry-records` 7a6b418 and deployed to observe.bapc.app (version 3f9464f5); checked live. Slot #6's connection is marked verified (configured → testing → verified, 22:45 UTC).
-- Found while fixing it: the console's offline cache never updated after a deploy, so returning visitors kept an old build. Fixed in 63aee9c (pushed to Code Adytum); deploy waits for the owner's yes.
+- Found while fixing it: the console's offline cache never updated after a deploy, so returning visitors kept an old build. Fixed in 63aee9c and deployed on 25 Nov at the owner's yes (version 06cc3efa); checked live: a browser stuck on the old copy switched to the new build and dropped the old cache.
 - The stopped Docker stack is kept as a fallback; remove it after a quiet week, with the owner's yes.
 - Merge the Code Adytum branches: `vpn/launch-readiness`, `host-vpn-ready`, `sql-vault-link`, `backup-bapc-vpn`, `billing-eu-uk-vat`, `vpn-feed`, `status-bapc-vpn`.
 - A pen test. Stronger later: a signing service in BAPC Secrets so the device CA key never leaves it (today it is held in BAPC Secrets and loaded into memory).
