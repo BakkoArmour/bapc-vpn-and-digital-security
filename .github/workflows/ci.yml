@@ -67,3 +67,5 @@ jobs:
           CONTROL_API_TOKEN_SECRET: ci-only-secret-at-least-32-characters
           EVENT_SIGNING_SECRET: ci-only-secret-at-least-32-characters
           OOB_SHARED_SECRET: ci-only-oob-secret-at-least-32-chars
+          # Required since attestation became fail-closed; any of the three real providers validates the file.
+          ATTESTATION_PROVIDER: linux-tpm2
